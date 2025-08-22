@@ -1,0 +1,50 @@
+name: 🎪 Circus Tent Environment Manager
+
+# Trigger on circus tent labels
+on:
+  pull_request_target:
+    types: [labeled, unlabeled, synchronize]
+
+jobs:
+  circus-handler:
+    # Only run if circus tent labels are involved
+    if: contains(github.event.label.name, '🎪') || github.event_name == 'synchronize'
+
+    concurrency:
+      group: circus-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
+
+    name: Process circus tent operations
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Install Superset Showtime
+        run: |
+          pip install superset-showtime
+
+      - name: Process circus triggers
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: us-west-2
+          GITHUB_ORG: apache
+          GITHUB_REPO: superset
+        run: |
+          python -m showtime handle-trigger ${{ github.event.pull_request.number }}
+
+      - name: Handle synchronize events (new commits)
+        if: github.event_name == 'synchronize'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: us-west-2
+          GITHUB_ORG: apache
+          GITHUB_REPO: superset
+        run: |
+          python -m showtime handle-sync ${{ github.event.pull_request.number }}

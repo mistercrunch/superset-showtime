@@ -1,0 +1,271 @@
+"""
+🎪 Circus tent emoji label parsing and state management
+
+Core logic for parsing GitHub labels with circus tent emoji patterns.
+"""
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import TYPE_CHECKING, List, Optional
+
+if TYPE_CHECKING:
+    from .github import GitHubInterface
+
+
+@dataclass
+class Show:
+    """Single ephemeral environment state from circus labels"""
+
+    pr_number: int
+    sha: str  # 7-char commit SHA
+    status: str  # building, running, updating, failed
+    ip: Optional[str] = None  # Environment IP address
+    created_at: Optional[str] = None  # ISO timestamp
+    ttl: str = "24h"  # 24h, 48h, close, etc.
+    requested_by: Optional[str] = None  # GitHub username
+    config: str = "standard"  # Configuration (alerts,debug)
+
+    @property
+    def aws_service_name(self) -> str:
+        """Deterministic ECS service name: pr-{pr_number}-{sha}"""
+        return f"pr-{self.pr_number}-{self.sha}"
+
+    @property
+    def aws_image_tag(self) -> str:
+        """Deterministic ECR image tag: pr-{pr_number}-{sha}-ci"""
+        return f"pr-{self.pr_number}-{self.sha}-ci"
+
+    @property
+    def is_active(self) -> bool:
+        """Check if this is the currently active show"""
+        return self.status == "running"
+
+    @property
+    def is_building(self) -> bool:
+        """Check if environment is currently building"""
+        return self.status == "building"
+
+    @property
+    def is_updating(self) -> bool:
+        """Check if environment is currently updating"""
+        return self.status == "updating"
+
+    def needs_update(self, latest_sha: str) -> bool:
+        """Check if environment needs update to latest SHA"""
+        return self.sha != latest_sha[:7]
+
+    def to_circus_labels(self) -> List[str]:
+        """Convert show state to circus tent emoji labels (per-SHA format)"""
+        if not self.created_at:
+            self.created_at = datetime.utcnow().strftime("%Y-%m-%dT%H-%M")
+
+        labels = [
+            f"🎪 🚦 {self.sha} {self.status}",  # Per-SHA status
+            f"🎪 🎯 {self.sha}",  # Active pointer
+            f"🎪 📅 {self.sha} {self.created_at}",  # Per-SHA timestamp
+            f"🎪 ⌛ {self.sha} {self.ttl}",  # Per-SHA TTL
+        ]
+
+        if self.ip:
+            labels.append(f"🎪 🌐 {self.sha} {self.ip.replace('.', '-')}")
+
+        if self.requested_by:
+            labels.append(f"🎪 🤡 {self.sha} {self.requested_by}")
+
+        if self.config != "standard":
+            labels.append(f"🎪 ⚙️ {self.sha} {self.config}")
+
+        return labels
+
+    @classmethod
+    def from_circus_labels(cls, pr_number: int, labels: List[str], sha: str) -> Optional["Show"]:
+        """Create Show from circus tent labels for specific SHA"""
+        show_data = {
+            "pr_number": pr_number,
+            "sha": sha,
+            "status": "building",  # default
+        }
+
+        for label in labels:
+            if not label.startswith("🎪 "):
+                continue
+
+            parts = label.split(" ", 3)  # Split into 4 parts for per-SHA format
+
+            if len(parts) == 3:  # Old format: 🎪 🎯 sha
+                emoji, value = parts[1], parts[2]
+                if emoji == "🎯" and value == sha:  # Active pointer
+                    pass  # This SHA is active
+            elif len(parts) == 4:  # New per-SHA format: 🎪 🚦 sha status
+                emoji, label_sha, value = parts[1], parts[2], parts[3]
+
+                if label_sha != sha:  # Only process labels for this SHA
+                    continue
+
+                if emoji == "🚦":  # Status
+                    show_data["status"] = value
+                elif emoji == "📅":  # Timestamp
+                    show_data["created_at"] = value
+                elif emoji == "🌐":  # IP
+                    show_data["ip"] = value.replace("-", ".")
+                elif emoji == "⌛":  # TTL
+                    show_data["ttl"] = value
+                elif emoji == "🤡":  # User (clown!)
+                    show_data["requested_by"] = value
+                elif emoji == "⚙️":  # Config
+                    show_data["config"] = value
+
+        # Only return Show if we found relevant labels for this SHA
+        if any(label.endswith(f" {sha}") for label in labels if "🎯" in label or "🏗️" in label):
+            return cls(**show_data)
+
+        return None
+
+
+class PullRequest:
+    """GitHub PR with its shows parsed from circus labels"""
+
+    def __init__(self, pr_number: int, labels: List[str]):
+        self.pr_number = pr_number
+        self.labels = labels
+        self._shows = self._parse_shows_from_labels()
+
+    @property
+    def shows(self) -> List[Show]:
+        """All shows found in labels"""
+        return self._shows
+
+    @property
+    def current_show(self) -> Optional[Show]:
+        """The currently active show (from 🎯 label)"""
+        # Find the SHA that's marked as active (🎯)
+        active_sha = None
+        for label in self.labels:
+            if label.startswith("🎪 🎯 "):
+                active_sha = label.split(" ")[2]
+                break
+
+        if not active_sha:
+            return None
+
+        # Find the show with that SHA
+        for show in self.shows:
+            if show.sha == active_sha:
+                return show
+
+        return None
+
+    @property
+    def building_show(self) -> Optional[Show]:
+        """Show currently being built (from 🏗️ label)"""
+        building_sha = None
+        for label in self.labels:
+            if label.startswith("🎪 🏗️ "):
+                building_sha = label.split(" ")[2]
+                break
+
+        if not building_sha:
+            return None
+
+        for show in self.shows:
+            if show.sha == building_sha:
+                return show
+
+        return None
+
+    @property
+    def circus_labels(self) -> List[str]:
+        """All circus tent labels"""
+        return [label for label in self.labels if label.startswith("🎪 ")]
+
+    def has_shows(self) -> bool:
+        """Check if PR has any shows"""
+        return len(self.shows) > 0
+
+    def get_show_by_sha(self, sha: str) -> Optional[Show]:
+        """Get specific show by SHA"""
+        for show in self.shows:
+            if show.sha == sha[:7]:
+                return show
+        return None
+
+    def _parse_shows_from_labels(self) -> List[Show]:
+        """Parse all shows from circus labels"""
+        shows = []
+
+        # Find all unique SHAs mentioned in labels
+        shas = set()
+        for label in self.labels:
+            if label.startswith("🎪 🎯 ") or label.startswith("🎪 🏗️ "):
+                sha = label.split(" ")[2]
+                shas.add(sha)
+
+        # Create Show object for each SHA
+        for sha in shas:
+            show = Show.from_circus_labels(self.pr_number, self.labels, sha)
+            if show:
+                shows.append(show)
+
+        return shows
+
+    @classmethod
+    def from_id(cls, pr_number: int, github: "GitHubInterface") -> "PullRequest":
+        """Load PR with current labels from GitHub"""
+        labels = github.get_labels(pr_number)
+        return cls(pr_number, labels)
+
+    def refresh_labels(self, github: "GitHubInterface") -> None:
+        """Refresh labels from GitHub and reparse shows"""
+        self.labels = github.get_labels(self.pr_number)
+        self._shows = self._parse_shows_from_labels()
+
+
+# Utility functions for configuration label handling
+def is_configuration_label(label: str) -> bool:
+    """Check if label is a configuration command"""
+    return label.startswith("🎪 conf-")
+
+
+def parse_configuration_command(label: str) -> Optional[str]:
+    """
+    Parse configuration command from label
+
+    Args:
+        label: Label like "🎪 conf-enable-ALERTS"
+
+    Returns:
+        Command string like "enable-ALERTS" or None if not a config label
+    """
+    if not is_configuration_label(label):
+        return None
+
+    return label.replace("🎪 conf-", "")
+
+
+def merge_config(current_config: str, command: str) -> str:
+    """
+    Merge new configuration command into existing config
+
+    Args:
+        current_config: Current config string like "standard,alerts"
+        command: New command like "enable-DASHBOARD_RBAC" or "disable-ALERTS"
+
+    Returns:
+        Updated config string
+    """
+    configs = current_config.split(",") if current_config != "standard" else []
+
+    # Handle feature flag commands
+    if command.startswith("enable-"):
+        feature = command.replace("enable-", "").lower()
+        configs = [c for c in configs if not c.startswith(f"no-{feature}")]
+        configs.append(feature)
+
+    elif command.startswith("disable-"):
+        feature = command.replace("disable-", "").lower()
+        configs = [c for c in configs if c != feature]
+        configs.append(f"no-{feature}")
+
+    # Return cleaned config
+    unique_configs = list(dict.fromkeys(configs))  # Remove duplicates, preserve order
+    return ",".join(unique_configs) if unique_configs else "standard"

@@ -1,0 +1,50 @@
+name: 🎪 Circus Cleanup
+
+# Scheduled cleanup of expired environments
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+
+  # Manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      max_age_hours:
+        description: 'Maximum age in hours before cleanup'
+        required: false
+        default: '48'
+      dry_run:
+        description: 'Dry run - show what would be cleaned'
+        required: false
+        default: 'false'
+
+jobs:
+  cleanup-expired:
+    name: Clean up expired circus environments
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Install Superset Showtime
+        run: |
+          pip install superset-showtime
+
+      - name: Cleanup expired environments
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: us-west-2
+          GITHUB_ORG: apache
+          GITHUB_REPO: superset
+        run: |
+          MAX_AGE="${{ github.event.inputs.max_age_hours || '48' }}"
+          DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
+
+          if [ "$DRY_RUN" = "true" ]; then
+            python -m showtime cleanup --dry-run --older-than "${MAX_AGE}h"
+          else
+            python -m showtime cleanup --older-than "${MAX_AGE}h"
+          fi
