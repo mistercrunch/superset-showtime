@@ -60,20 +60,20 @@ class Show:
             self.created_at = datetime.utcnow().strftime("%Y-%m-%dT%H-%M")
 
         labels = [
-            f"🎪 🚦 {self.sha} {self.status}",  # Per-SHA status
-            f"🎪 🎯 {self.sha}",  # Active pointer
-            f"🎪 📅 {self.sha} {self.created_at}",  # Per-SHA timestamp
-            f"🎪 ⌛ {self.sha} {self.ttl}",  # Per-SHA TTL
+            f"🎪 {self.sha} 🚦 {self.status}",  # SHA-first status
+            f"🎪 🎯 {self.sha}",  # Active pointer (no value)
+            f"🎪 {self.sha} 📅 {self.created_at}",  # SHA-first timestamp
+            f"🎪 {self.sha} ⌛ {self.ttl}",  # SHA-first TTL
         ]
 
         if self.ip:
-            labels.append(f"🎪 🌐 {self.sha} {self.ip.replace('.', '-')}")
+            labels.append(f"🎪 {self.sha} 🌐 {self.ip.replace('.', '-')}")
 
         if self.requested_by:
-            labels.append(f"🎪 🤡 {self.sha} {self.requested_by}")
+            labels.append(f"🎪 {self.sha} 🤡 {self.requested_by}")
 
         if self.config != "standard":
-            labels.append(f"🎪 ⚙️ {self.sha} {self.config}")
+            labels.append(f"🎪 {self.sha} ⚙️ {self.config}")
 
         return labels
 
@@ -96,8 +96,8 @@ class Show:
                 emoji, value = parts[1], parts[2]
                 if emoji == "🎯" and value == sha:  # Active pointer
                     pass  # This SHA is active
-            elif len(parts) == 4:  # New per-SHA format: 🎪 🚦 sha status
-                emoji, label_sha, value = parts[1], parts[2], parts[3]
+            elif len(parts) == 4:  # SHA-first format: 🎪 sha 🚦 status
+                label_sha, emoji, value = parts[1], parts[2], parts[3]
 
                 if label_sha != sha:  # Only process labels for this SHA
                     continue

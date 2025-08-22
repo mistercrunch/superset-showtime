@@ -25,15 +25,15 @@ Superset Showtime replaces the complex GitHub Actions scripts for ephemeral envi
 🎪 trigger-start
 
 # System responds with state labels:
-🎪 🚦 abc123f building      # Environment abc123f is building
+🎪 abc123f 🚦 building      # Environment abc123f is building
 🎪 🎯 abc123f               # abc123f is the active environment
-🎪 📅 abc123f 2024-01-15T14-30  # Created timestamp
-🎪 ⌛ abc123f 24h           # Time-to-live policy
-🎪 🤡 abc123f maxime        # Requested by maxime (clown emoji!)
+🎪 abc123f 📅 2024-01-15T14-30  # Created timestamp
+🎪 abc123f ⌛ 24h           # Time-to-live policy
+🎪 abc123f 🤡 maxime        # Requested by maxime (clown emoji!)
 
 # When ready:
-🎪 🚦 abc123f running       # Environment is now running
-🎪 🌐 abc123f 52-1-2-3      # Available at http://52.1.2.3:8080
+🎪 abc123f 🚦 running       # Environment is now running
+🎪 abc123f 🌐 52-1-2-3      # Available at http://52.1.2.3:8080
 ```
 
 ## 🚀 Quick Start for Superset Contributors
@@ -99,14 +99,14 @@ showtime test-lifecycle 1234           # Full workflow simulation
 
 | Label Pattern | Meaning | Example |
 |---------------|---------|---------|
-| `🎪 🚦 {sha} {status}` | Environment status | `🎪 🚦 abc123f running` |
+| `🎪 {sha} 🚦 {status}` | Environment status | `🎪 abc123f 🚦 running` |
 | `🎪 🎯 {sha}` | Active environment pointer | `🎪 🎯 abc123f` |
 | `🎪 🏗️ {sha}` | Building environment pointer | `🎪 🏗️ def456a` |
-| `🎪 📅 {sha} {timestamp}` | Creation time | `🎪 📅 abc123f 2024-01-15T14-30` |
-| `🎪 🌐 {sha} {ip-with-dashes}` | Environment IP | `🎪 🌐 abc123f 52-1-2-3` |
-| `🎪 ⌛ {sha} {ttl}` | Time-to-live policy | `🎪 ⌛ abc123f 24h` |
-| `🎪 🤡 {sha} {username}` | Who requested | `🎪 🤡 abc123f maxime` |
-| `🎪 ⚙️ {sha} {config}` | Feature flags enabled | `🎪 ⚙️ abc123f alerts,debug` |
+| `🎪 {sha} 📅 {timestamp}` | Creation time | `🎪 abc123f 📅 2024-01-15T14-30` |
+| `🎪 {sha} 🌐 {ip-with-dashes}` | Environment IP | `🎪 abc123f 🌐 52-1-2-3` |
+| `🎪 {sha} ⌛ {ttl}` | Time-to-live policy | `🎪 abc123f ⌛ 24h` |
+| `🎪 {sha} 🤡 {username}` | Who requested | `🎪 abc123f 🤡 maxime` |
+| `🎪 {sha} ⚙️ {config}` | Feature flags enabled | `🎪 abc123f ⚙️ alerts,debug` |
 
 ## 🔄 Complete Workflows
 
@@ -115,14 +115,14 @@ showtime test-lifecycle 1234           # Full workflow simulation
 1. **Add trigger label** in GitHub UI: `🎪 trigger-start`
 2. **Watch state labels appear:**
    ```
-   🎪 🚦 abc123f building      ← Environment is building
+   🎪 abc123f 🚦 building      ← Environment is building
    🎪 🎯 abc123f               ← This is the active environment
-   🎪 📅 abc123f 2024-01-15T14-30  ← Started building at this time
+   🎪 abc123f 📅 2024-01-15T14-30  ← Started building at this time
    ```
 3. **Wait for completion:**
    ```
-   🎪 🚦 abc123f running       ← Now ready!
-   🎪 🌐 abc123f 52-1-2-3      ← Visit http://52.1.2.3:8080
+   🎪 abc123f 🚦 running       ← Now ready!
+   🎪 abc123f 🌐 52-1-2-3      ← Visit http://52.1.2.3:8080
    ```
 
 ### Enabling Feature Flags
@@ -130,8 +130,8 @@ showtime test-lifecycle 1234           # Full workflow simulation
 1. **Add config label:** `🎪 conf-enable-ALERTS`
 2. **Watch config update:**
    ```
-   🎪 ⚙️ abc123f standard     ← Before
-   🎪 ⚙️ abc123f alerts       ← After (feature enabled!)
+   🎪 abc123f ⚙️ standard     ← Before
+   🎪 abc123f ⚙️ alerts       ← After (feature enabled!)
    ```
 
 ### Rolling Updates (Automatic!)
@@ -145,15 +145,15 @@ When you push new commits, Showtime automatically:
 You'll see:
 ```bash
 # During update:
-🎪 🚦 abc123f running       # Old environment still serving
-🎪 🚦 def456a building      # New environment building
+🎪 abc123f 🚦 running       # Old environment still serving
+🎪 def456a 🚦 building      # New environment building
 🎪 🎯 abc123f               # Traffic still on old
 🎪 🏗️ def456a               # New one being prepared
 
 # After update:
-🎪 🚦 def456a running       # New environment live
+🎪 def456a 🚦 running       # New environment live
 🎪 🎯 def456a               # Traffic switched
-🎪 🌐 def456a 52-4-5-6      # New IP address
+🎪 def456a 🌐 52-4-5-6      # New IP address
 # All abc123f labels removed automatically
 ```
 

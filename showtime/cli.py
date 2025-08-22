@@ -20,16 +20,16 @@ app = typer.Typer(
 
 [bold]GitHub Label Workflow:[/bold]
 1. Add [green]🎪 trigger-start[/green] label to PR → Creates environment
-2. Watch state labels: [blue]🎪 🚦 building[/blue] → [green]🎪 🚦 running[/green]
+2. Watch state labels: [blue]🎪 abc123f 🚦 building[/blue] → [green]🎪 abc123f 🚦 running[/green]
 3. Add [yellow]🎪 conf-enable-ALERTS[/yellow] → Enables feature flags
 4. Add [red]🎪 trigger-stop[/red] label → Destroys environment
 
 [bold]Reading State Labels:[/bold]
-• [green]🎪 🚦 running[/green] - Environment status
-• [blue]🎪 🎯 abc123f[/blue] - Active environment SHA
-• [cyan]🎪 🌐 52-1-2-3[/cyan] - Environment IP (http://52.1.2.3:8080)
-• [yellow]🎪 ⌛ 24h[/yellow] - TTL policy
-• [magenta]🎪 🤡 maxime[/magenta] - Who requested (clown!)
+• [green]🎪 abc123f 🚦 running[/green] - Environment status
+• [blue]🎪 🎯 abc123f[/blue] - Active environment pointer
+• [cyan]🎪 abc123f 🌐 52-1-2-3[/cyan] - Environment IP (http://52.1.2.3:8080)
+• [yellow]🎪 abc123f ⌛ 24h[/yellow] - TTL policy
+• [magenta]🎪 abc123f 🤡 maxime[/magenta] - Who requested (clown!)
 
 [dim]CLI commands work with existing environments or dry-run new ones.[/dim]""",
     rich_markup_mode="rich",
@@ -161,6 +161,7 @@ def stop(
     dry_run_aws: bool = typer.Option(
         False, "--dry-run-aws", help="Skip AWS operations, use mock data"
     ),
+    aws_sleep: int = typer.Option(0, "--aws-sleep", help="Seconds to sleep during AWS operations"),
 ):
     """Delete environment for PR"""
     try:
@@ -193,6 +194,12 @@ def stop(
             console.print("🎪 [bold yellow]DRY-RUN-AWS[/bold yellow] - Would delete AWS resources:")
             console.print(f"  - ECS service: {show.aws_service_name}")
             console.print(f"  - ECR image: {show.aws_image_tag}")
+            if aws_sleep > 0:
+                import time
+
+                console.print(f"🎪 Sleeping {aws_sleep}s to simulate AWS cleanup...")
+                time.sleep(aws_sleep)
+            console.print("🎪 [bold green]Mock AWS cleanup complete![/bold green]")
         else:
             # TODO: Implement real AWS cleanup
             console.print("🎪 [bold yellow]Real AWS cleanup not yet implemented[/bold yellow]")
@@ -320,14 +327,16 @@ def labels():
     state_table.add_column("Meaning", style="white")
     state_table.add_column("Example", style="dim")
 
-    state_table.add_row("🎪 🚦 {status}", "Environment status", "🎪 🚦 running")
-    state_table.add_row("🎪 🎯 {sha}", "Active environment SHA", "🎪 🎯 abc123f")
-    state_table.add_row("🎪 🏗️ {sha}", "Building environment SHA", "🎪 🏗️ def456a")
-    state_table.add_row("🎪 📅 {timestamp}", "Creation timestamp", "🎪 📅 2024-01-15T14-30")
-    state_table.add_row("🎪 🌐 {ip-with-dashes}", "Environment IP", "🎪 🌐 52-1-2-3")
-    state_table.add_row("🎪 ⌛ {ttl-policy}", "TTL policy", "🎪 ⌛ 24h")
-    state_table.add_row("🎪 🤡 {username}", "Requested by", "🎪 🤡 maxime")
-    state_table.add_row("🎪 ⚙️ {config-list}", "Feature flags", "🎪 ⚙️ alerts,debug")
+    state_table.add_row("🎪 {sha} 🚦 {status}", "Environment status", "🎪 abc123f 🚦 running")
+    state_table.add_row("🎪 🎯 {sha}", "Active environment pointer", "🎪 🎯 abc123f")
+    state_table.add_row("🎪 🏗️ {sha}", "Building environment pointer", "🎪 🏗️ def456a")
+    state_table.add_row(
+        "🎪 {sha} 📅 {timestamp}", "Creation timestamp", "🎪 abc123f 📅 2024-01-15T14-30"
+    )
+    state_table.add_row("🎪 {sha} 🌐 {ip-with-dashes}", "Environment IP", "🎪 abc123f 🌐 52-1-2-3")
+    state_table.add_row("🎪 {sha} ⌛ {ttl-policy}", "TTL policy", "🎪 abc123f ⌛ 24h")
+    state_table.add_row("🎪 {sha} 🤡 {username}", "Requested by", "🎪 abc123f 🤡 maxime")
+    state_table.add_row("🎪 {sha} ⚙️ {config-list}", "Feature flags", "🎪 abc123f ⚙️ alerts,debug")
 
     console.print(state_table)
     console.print()
@@ -338,19 +347,27 @@ def labels():
 
     console.print("[bold]1. Create Environment:[/bold]")
     console.print("   • Add label: [green]🎪 trigger-start[/green]")
-    console.print("   • Watch for: [blue]🎪 🚦 building[/blue] → [green]🎪 🚦 running[/green]")
-    console.print("   • Get URL from: [cyan]🎪 🌐 52-1-2-3[/cyan] → http://52.1.2.3:8080")
+    console.print(
+        "   • Watch for: [blue]🎪 abc123f 🚦 building[/blue] → [green]🎪 abc123f 🚦 running[/green]"
+    )
+    console.print("   • Get URL from: [cyan]🎪 abc123f 🌐 52-1-2-3[/cyan] → http://52.1.2.3:8080")
     console.print()
 
     console.print("[bold]2. Enable Feature Flag:[/bold]")
     console.print("   • Add label: [yellow]🎪 conf-enable-ALERTS[/yellow]")
-    console.print("   • Watch for: [blue]🎪 🚦 configuring[/blue] → [green]🎪 🚦 running[/green]")
-    console.print("   • Config updates: [cyan]🎪 ⚙️ standard[/cyan] → [cyan]🎪 ⚙️ alerts[/cyan]")
+    console.print(
+        "   • Watch for: [blue]🎪 abc123f 🚦 configuring[/blue] → [green]🎪 abc123f 🚦 running[/green]"
+    )
+    console.print(
+        "   • Config updates: [cyan]🎪 abc123f ⚙️ standard[/cyan] → [cyan]🎪 abc123f ⚙️ alerts[/cyan]"
+    )
     console.print()
 
     console.print("[bold]3. Update to New Commit:[/bold]")
     console.print("   • Add label: [green]🎪 trigger-sync[/green]")
-    console.print("   • Watch for: [blue]🎪 🚦 updating[/blue] → [green]🎪 🚦 running[/green]")
+    console.print(
+        "   • Watch for: [blue]🎪 abc123f 🚦 updating[/blue] → [green]🎪 def456a 🚦 running[/green]"
+    )
     console.print("   • SHA changes: [cyan]🎪 🎯 abc123f[/cyan] → [cyan]🎪 🎯 def456a[/cyan]")
     console.print()
 

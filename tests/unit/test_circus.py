@@ -14,12 +14,12 @@ from showtime.core.circus import (
 def test_show_from_circus_labels():
     """Test creating Show from circus tent labels"""
     labels = [
-        "🎪 🚦 running",
+        "🎪 abc123f 🚦 running",
         "🎪 🎯 abc123f",
-        "🎪 📅 2024-01-15T14-30",
-        "🎪 🌐 52-1-2-3",
-        "🎪 ⌛ 24h",
-        "🎪 👤 maxime",
+        "🎪 abc123f 📅 2024-01-15T14-30",
+        "🎪 abc123f 🌐 52-1-2-3",
+        "🎪 abc123f ⌛ 24h",
+        "🎪 abc123f 🤡 maxime",
         "some-other-label",  # Should be ignored
     ]
 
@@ -36,7 +36,7 @@ def test_show_from_circus_labels():
 
 def test_show_with_config():
     """Test Show with configuration"""
-    labels = ["🎪 🚦 running", "🎪 🎯 def456a", "🎪 ⚙️ debug,alerts"]
+    labels = ["🎪 def456a 🚦 running", "🎪 🎯 def456a", "🎪 def456a ⚙️ debug,alerts"]
 
     show = Show.from_circus_labels(1234, labels, "def456a")
 
@@ -49,9 +49,10 @@ def test_show_with_config():
 def test_pullrequest_during_update():
     """Test PullRequest with multiple shows during update"""
     labels = [
-        "🎪 🚦 updating",
-        "🎪 🎯 abc123f",  # Old active
-        "🎪 🏗️ def456a",  # New building
+        "🎪 abc123f 🚦 running",  # Old active
+        "🎪 def456a 🚦 building",  # New building
+        "🎪 🎯 abc123f",  # Active pointer
+        "🎪 🏗️ def456a",  # Building pointer
     ]
 
     pr = PullRequest(1234, labels)
@@ -90,13 +91,13 @@ def test_show_to_circus_labels():
     labels = show.to_circus_labels()
 
     expected = [
-        "🎪 🚦 running",
+        "🎪 abc123f 🚦 running",
         "🎪 🎯 abc123f",
-        "🎪 📅 2024-01-15T14-30",
-        "🎪 🌐 52-1-2-3",  # IP with dashes
-        "🎪 ⌛ 48h",
-        "🎪 👤 maxime",
-        "🎪 ⚙️ debug,alerts",
+        "🎪 abc123f 📅 2024-01-15T14-30",
+        "🎪 abc123f 🌐 52-1-2-3",  # IP with dashes
+        "🎪 abc123f ⌛ 48h",
+        "🎪 abc123f 🤡 maxime",
+        "🎪 abc123f ⚙️ debug,alerts",
     ]
 
     # Check all expected labels are present
