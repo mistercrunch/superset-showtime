@@ -16,6 +16,7 @@ on:
         description: 'Specific SHA to deploy (optional, defaults to latest)'
         required: false
         type: string
+        pattern: '^[a-f0-9]{40}$'
 
 # Common environment variables for all jobs
 env:
@@ -45,7 +46,17 @@ jobs:
       - name: Check what actions are needed
         id: check
         run: |
-          PR_NUM=${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          # Bulletproof PR number extraction
+          if [[ -n "${{ github.event.pull_request.number }}" ]]; then
+            PR_NUM="${{ github.event.pull_request.number }}"
+          elif [[ -n "${{ github.event.inputs.pr_number }}" ]]; then
+            PR_NUM="${{ github.event.inputs.pr_number }}"
+          else
+            echo "❌ No PR number found in event or inputs"
+            exit 1
+          fi
+
+          echo "Using PR number: $PR_NUM"
           OUTPUT=$(python -m showtime sync $PR_NUM --check-only)
           echo "$OUTPUT"
 
@@ -57,6 +68,7 @@ jobs:
           echo "action_needed=$ACTION" >> $GITHUB_OUTPUT
           echo "build_needed=$BUILD" >> $GITHUB_OUTPUT
           echo "deploy_needed=$DEPLOY" >> $GITHUB_OUTPUT
+          echo "pr_number=$PR_NUM" >> $GITHUB_OUTPUT
 
       - name: Setup Docker Environment
         if: steps.check.outputs.build_needed == 'true'
@@ -71,35 +83,34 @@ jobs:
         uses: ./.github/actions/setup-supersetbot/
 
       - name: Get PR SHA for build
+        id: sha
         if: steps.check.outputs.build_needed == 'true'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            let sha;
+        run: |
+          # Simple SHA handling - use input or default to PR head
+          if [[ -n "${{ github.event.inputs.sha }}" ]]; then
+            SHA="${{ github.event.inputs.sha }}"
+            echo "Using override SHA: $SHA"
+          elif [[ -n "${{ github.event.pull_request.head.sha }}" ]]; then
+            SHA="${{ github.event.pull_request.head.sha }}"
+            echo "Using PR head SHA: $SHA"
+          else
+            echo "❌ No SHA available from PR head or inputs"
+            exit 1
+          fi
 
-            // Check for SHA override from workflow_dispatch
-            if ("${{ github.event.inputs.sha }}") {
-              sha = "${{ github.event.inputs.sha }}";
-              console.log(`Using override SHA: ${sha}`);
-            } else {
-              // Use latest SHA from PR
-              const prNumber = "${{ github.event.pull_request.number || github.event.inputs.pr_number }}";
-              const { data: pr } = await github.rest.pulls.get({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: prNumber
-              });
-              sha = pr.head.sha;
-              console.log(`Using latest SHA: ${sha}`);
-            }
+          # Validate SHA format (40-char hex)
+          if [[ ! "$SHA" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "❌ Invalid SHA format: $SHA"
+            exit 1
+          fi
 
-            core.exportVariable("PR_SHA", sha);
+          echo "build_sha=$SHA" >> $GITHUB_OUTPUT
 
       - name: Checkout PR code
         if: steps.check.outputs.build_needed == 'true'
         uses: actions/checkout@v4
         with:
-          ref: ${{ env.PR_SHA }}
+          ref: ${{ steps.sha.outputs.build_sha }}
           persist-credentials: false
 
       - name: Build Docker image
@@ -110,13 +121,13 @@ jobs:
             --load \
             --preset ci \
             --platform linux/amd64 \
-            --context-ref "${{ env.PR_SHA }}" \
+            --context-ref "${{ steps.sha.outputs.build_sha }}" \
             --extra-flags "--build-arg INCLUDE_CHROMIUM=false --build-arg LOAD_EXAMPLES_DUCKDB=true"
 
       - name: Execute sync deployment
         if: steps.check.outputs.deploy_needed == 'true'
         run: |
-          PR_NUM=${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          PR_NUM="${{ steps.check.outputs.pr_number }}"
           if [[ -n "${{ github.event.inputs.sha }}" ]]; then
             python -m showtime sync $PR_NUM --deploy --sha "${{ github.event.inputs.sha }}"
           else
