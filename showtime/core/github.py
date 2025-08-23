@@ -103,14 +103,17 @@ class GitHubInterface:
 
     def get_latest_commit_sha(self, pr_number: int) -> str:
         """Get the latest commit SHA for a PR"""
+        pr_data = self.get_pr_data(pr_number)
+        return pr_data["head"]["sha"]
+
+    def get_pr_data(self, pr_number: int) -> dict:
+        """Get full PR data including description"""
         url = f"{self.base_url}/repos/{self.org}/{self.repo}/pulls/{pr_number}"
 
         with httpx.Client() as client:
             response = client.get(url, headers=self.headers)
             response.raise_for_status()
-
-            pr_data = response.json()
-            return pr_data["head"]["sha"]
+            return response.json()
 
     def get_circus_labels(self, pr_number: int) -> List[str]:
         """Get only circus tent emoji labels for a PR"""
@@ -125,9 +128,10 @@ class GitHubInterface:
 
     def find_prs_with_shows(self) -> List[int]:
         """Find all PRs that have circus tent labels"""
-        # Search for issues with circus tent labels
+        # Search for issues with circus tent labels (updated for SHA-first format)
         url = f"{self.base_url}/search/issues"
-        params = {"q": f'repo:{self.org}/{self.repo} is:pr is:open label:"🎪 🚦"', "per_page": 100}
+        # Search for PRs with any circus tent labels
+        params = {"q": f"repo:{self.org}/{self.repo} is:pr 🎪", "per_page": 100}  # Include closed PRs
 
         with httpx.Client() as client:
             response = client.get(url, headers=self.headers, params=params)
@@ -135,6 +139,14 @@ class GitHubInterface:
 
             issues = response.json()["items"]
             return [issue["number"] for issue in issues]
+
+    def post_comment(self, pr_number: int, body: str) -> None:
+        """Post a comment on a PR"""
+        url = f"{self.base_url}/repos/{self.org}/{self.repo}/issues/{pr_number}/comments"
+
+        with httpx.Client() as client:
+            response = client.post(url, headers=self.headers, json={"body": body})
+            response.raise_for_status()
 
     def validate_connection(self) -> bool:
         """Test GitHub API connection"""
@@ -146,3 +158,54 @@ class GitHubInterface:
                 return True
         except Exception:
             return False
+
+    def get_repository_labels(self) -> List[str]:
+        """Get all labels defined in the repository"""
+        url = f"{self.base_url}/repos/{self.org}/{self.repo}/labels"
+
+        with httpx.Client() as client:
+            response = client.get(url, headers=self.headers, params={"per_page": 100})
+            response.raise_for_status()
+
+            labels_data = response.json()
+            return [label["name"] for label in labels_data]
+
+    def delete_repository_label(self, label_name: str) -> bool:
+        """Delete a label definition from the repository"""
+        import urllib.parse
+
+        encoded_label = urllib.parse.quote(label_name, safe="")
+        url = f"{self.base_url}/repos/{self.org}/{self.repo}/labels/{encoded_label}"
+
+        with httpx.Client() as client:
+            response = client.delete(url, headers=self.headers)
+            # 404 is OK - label might not exist
+            if response.status_code in (200, 204):
+                return True
+            elif response.status_code == 404:
+                return False  # Label doesn't exist
+            else:
+                response.raise_for_status()
+
+    def cleanup_sha_labels(self, dry_run: bool = False) -> List[str]:
+        """Clean up all circus tent labels with SHA patterns from repository"""
+        import re
+
+        all_labels = self.get_repository_labels()
+        sha_labels = []
+
+        # Find labels with SHA patterns (7+ hex chars after 🎪)
+        sha_pattern = re.compile(r"^🎪 .* [a-f0-9]{7,}( .*)?$")
+
+        for label in all_labels:
+            if sha_pattern.match(label):
+                sha_labels.append(label)
+
+        if not dry_run:
+            deleted_labels = []
+            for label in sha_labels:
+                if self.delete_repository_label(label):
+                    deleted_labels.append(label)
+            return deleted_labels
+
+        return sha_labels

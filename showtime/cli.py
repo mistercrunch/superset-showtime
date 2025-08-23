@@ -14,6 +14,83 @@ from .core.circus import PullRequest, Show
 from .core.emojis import STATUS_DISPLAY
 from .core.github import GitHubError, GitHubInterface
 
+# Constants
+DEFAULT_GITHUB_ACTOR = "unknown"
+
+
+def _get_service_urls(pr_number: int, sha: str = None):
+    """Get AWS Console URLs for a service"""
+    if sha:
+        service_name = f"pr-{pr_number}-{sha}-service"
+    else:
+        service_name = f"pr-{pr_number}-service"
+
+    return {
+        "logs": f"https://us-west-2.console.aws.amazon.com/ecs/v2/clusters/superset-ci/services/{service_name}/logs?region=us-west-2",
+        "service": f"https://us-west-2.console.aws.amazon.com/ecs/v2/clusters/superset-ci/services/{service_name}",
+    }
+
+
+def _show_service_urls(pr_number: int, context: str = "deployment", sha: str = None):
+    """Show helpful AWS Console URLs for monitoring service"""
+    urls = _get_service_urls(pr_number, sha)
+    console.print(f"\n🎪 [bold blue]Monitor {context} progress:[/bold blue]")
+    console.print(f"   📝 Live Logs: {urls['logs']}")
+    console.print(f"   📊 ECS Service: {urls['service']}")
+    console.print("")
+
+
+def _schedule_blue_cleanup(pr_number: int, blue_services: list):
+    """Schedule cleanup of blue services after successful green deployment"""
+    import threading
+    import time
+
+    def cleanup_after_delay():
+        """Background cleanup of blue services"""
+        try:
+            # Wait 5 minutes before cleanup
+            time.sleep(300)  # 5 minutes
+
+            console.print(
+                f"\n🧹 [bold blue]Starting scheduled cleanup of blue services for PR #{pr_number}[/bold blue]"
+            )
+
+            from .core.aws import AWSInterface
+
+            aws = AWSInterface()
+
+            for blue_svc in blue_services:
+                service_name = blue_svc["service_name"]
+                console.print(f"🗑️ Cleaning up blue service: {service_name}")
+
+                try:
+                    # Delete ECS service
+                    if aws._delete_ecs_service(service_name):
+                        # Delete ECR image
+                        pr_match = service_name.split("-")
+                        if len(pr_match) >= 2:
+                            pr_num = pr_match[1]
+                            image_tag = f"pr-{pr_num}-ci"  # Legacy format for old services
+                            aws._delete_ecr_image(image_tag)
+
+                        console.print(f"✅ Cleaned up blue service: {service_name}")
+                    else:
+                        console.print(f"⚠️ Failed to clean up: {service_name}")
+
+                except Exception as e:
+                    console.print(f"❌ Cleanup error for {service_name}: {e}")
+
+            console.print("🧹 ✅ Blue service cleanup completed")
+
+        except Exception as e:
+            console.print(f"❌ Background cleanup failed: {e}")
+
+    # Start cleanup in background thread
+    cleanup_thread = threading.Thread(target=cleanup_after_delay, daemon=True)
+    cleanup_thread.start()
+    console.print("🕐 Background cleanup scheduled")
+
+
 app = typer.Typer(
     name="showtime",
     help="""🎪 Apache Superset ephemeral environment management
@@ -201,8 +278,65 @@ def stop(
                 time.sleep(aws_sleep)
             console.print("🎪 [bold green]Mock AWS cleanup complete![/bold green]")
         else:
-            # TODO: Implement real AWS cleanup
-            console.print("🎪 [bold yellow]Real AWS cleanup not yet implemented[/bold yellow]")
+            # Real AWS cleanup
+            from .core.aws import AWSInterface
+
+            console.print("🎪 [bold blue]Starting AWS cleanup...[/bold blue]")
+            aws = AWSInterface()
+
+            # Show logs URL for monitoring cleanup
+            _show_service_urls(pr_number, "cleanup")
+
+            try:
+                # Get current environment info
+                pr = PullRequest.from_id(pr_number, github)
+
+                if pr.current_show:
+                    show = pr.current_show
+                    console.print(f"🎪 Destroying environment: {show.aws_service_name}")
+
+                    # Step 1: Check if ECS service exists and is active
+                    service_name = f"pr-{pr_number}-service"  # Match GHA service naming
+                    console.print(f"🎪 Checking ECS service: {service_name}")
+
+                    service_exists = aws._service_exists(service_name)
+
+                    if service_exists:
+                        console.print(f"🎪 Found active ECS service: {service_name}")
+
+                        # Step 2: Delete ECS service
+                        console.print("🎪 Deleting ECS service...")
+                        success = aws._delete_ecs_service(service_name)
+
+                        if success:
+                            console.print("🎪 ✅ ECS service deleted successfully")
+
+                            # Step 3: Delete ECR image tag
+                            image_tag = f"pr-{pr_number}-ci"  # Match GHA image tag format
+                            console.print(f"🎪 Deleting ECR image tag: {image_tag}")
+
+                            ecr_success = aws._delete_ecr_image(image_tag)
+
+                            if ecr_success:
+                                console.print("🎪 ✅ ECR image deleted successfully")
+                            else:
+                                console.print("🎪 ⚠️ ECR image deletion failed (may not exist)")
+
+                            console.print(
+                                "🎪 [bold green]✅ AWS cleanup completed successfully![/bold green]"
+                            )
+
+                        else:
+                            console.print("🎪 [bold red]❌ ECS service deletion failed[/bold red]")
+
+                    else:
+                        console.print(f"🎪 No active ECS service found: {service_name}")
+                        console.print("🎪 ✅ No AWS resources to clean up")
+                else:
+                    console.print(f"🎪 No active environment found for PR #{pr_number}")
+
+            except Exception as e:
+                console.print(f"🎪 [bold red]❌ AWS cleanup failed:[/bold red] {e}")
 
         # Remove circus labels
         github.remove_circus_labels(pr_number)
@@ -254,25 +388,40 @@ def list(
             console.print(f"🎪 No environments found{filter_msg}")
             return
 
-        # Create table
-        table = Table(title="🎪 Environment List")
-        table.add_column("PR", style="cyan")
-        table.add_column("Status", style="white")
-        table.add_column("Environment", style="green")
-        table.add_column("URL", style="blue")
-        table.add_column("TTL", style="yellow")
-        table.add_column("User", style="magenta")
+        # Create table with full terminal width
+        table = Table(title="🎪 Environment List", expand=True)
+        table.add_column("PR", style="cyan", min_width=6)
+        table.add_column("Status", style="white", min_width=12)
+        table.add_column("SHA", style="green", min_width=11)
+        table.add_column("Superset URL", style="blue", min_width=25)
+        table.add_column("AWS Logs", style="dim blue", min_width=15)
+        table.add_column("TTL", style="yellow", min_width=6)
+        table.add_column("User", style="magenta", min_width=10)
 
         status_emoji = STATUS_DISPLAY
 
         for show in sorted(all_shows, key=lambda s: s.pr_number):
-            url = f"http://{show.ip}:8080" if show.ip else "-"
+            # Make Superset URL clickable and show full URL
+            if show.ip:
+                full_url = f"http://{show.ip}:8080"
+                superset_url = f"[link={full_url}]{full_url}[/link]"
+            else:
+                superset_url = "-"
+
+            # Get AWS service URLs - iTerm2 supports Rich clickable links
+            aws_urls = _get_service_urls(show.pr_number, show.sha)
+            aws_logs_link = f"[link={aws_urls['logs']}]View[/link]"
+
+            # Make PR number clickable
+            pr_url = f"https://github.com/apache/superset/pull/{show.pr_number}"
+            clickable_pr = f"[link={pr_url}]{show.pr_number}[/link]"
 
             table.add_row(
-                str(show.pr_number),
+                clickable_pr,
                 f"{status_emoji.get(show.status, '❓')} {show.status}",
                 show.sha,
-                url,
+                superset_url,
+                aws_logs_link,
                 show.ttl,
                 f"@{show.requested_by}" if show.requested_by else "-",
             )
@@ -451,7 +600,9 @@ def handle_trigger(
 
         # Find trigger labels
         trigger_labels = [
-            l for l in pr.labels if l.startswith("🎪 trigger-") or l.startswith("🎪 conf-")
+            label
+            for label in pr.labels
+            if label.startswith("🎪 trigger-") or label.startswith("🎪 conf-")
         ]
 
         if not trigger_labels:
@@ -522,22 +673,166 @@ def cleanup(
     older_than: str = typer.Option(
         "48h", "--older-than", help="Clean environments older than this"
     ),
+    cleanup_labels: bool = typer.Option(
+        True,
+        "--cleanup-labels/--no-cleanup-labels",
+        help="Also cleanup SHA-based label definitions from repository",
+    ),
 ):
-    """🎪 Clean up orphaned or expired environments"""
+    """🎪 Clean up orphaned or expired environments and labels"""
     try:
         github = GitHubInterface()
 
-        if dry_run:
-            console.print(
-                f"🎪 [bold yellow]DRY RUN[/bold yellow] - Would clean environments older than {older_than}"
-            )
-            # TODO: Implement dry-run orphan detection
-            console.print("🎪 Orphan detection not yet implemented")
-            return
+        # Step 1: Clean up expired AWS ECS services
+        console.print("🎪 [bold blue]Checking AWS ECS services for cleanup...[/bold blue]")
 
-        console.print(f"🎪 Cleaning up environments older than {older_than}")
-        # TODO: Implement actual cleanup
-        console.print("🎪 [bold yellow]Cleanup logic not yet implemented[/bold yellow]")
+        from .core.aws import AWSInterface
+
+        aws = AWSInterface()
+
+        try:
+            expired_services = aws.find_expired_services(older_than)
+
+            if expired_services:
+                console.print(f"🎪 Found {len(expired_services)} expired ECS services")
+
+                for service_info in expired_services:
+                    service_name = service_info["service_name"]
+                    pr_number = service_info["pr_number"]
+                    age_hours = service_info["age_hours"]
+
+                    if dry_run:
+                        console.print(
+                            f"🎪 [yellow]Would delete service {service_name} (PR #{pr_number}, {age_hours:.1f}h old)[/yellow]"
+                        )
+                        console.print(
+                            f"🎪 [dim]Monitor at: https://us-west-2.console.aws.amazon.com/ecs/v2/clusters/superset-ci/services/{service_name}/logs?region=us-west-2[/dim]"
+                        )
+                    else:
+                        console.print(
+                            f"🎪 Deleting expired service {service_name} (PR #{pr_number}, {age_hours:.1f}h old)"
+                        )
+                        _show_service_urls(pr_number, "cleanup")
+
+                        # Delete ECS service
+                        if aws._delete_ecs_service(service_name):
+                            # Delete ECR image
+                            image_tag = f"pr-{pr_number}-ci"
+                            aws._delete_ecr_image(image_tag)
+                            console.print(f"🎪 ✅ Cleaned up {service_name}")
+                        else:
+                            console.print(f"🎪 ❌ Failed to clean up {service_name}")
+            else:
+                console.print("🎪 [dim]No expired ECS services found[/dim]")
+
+        except Exception as e:
+            console.print(f"🎪 [bold red]AWS cleanup failed:[/bold red] {e}")
+
+        # Step 2: Find and clean up expired environments from PRs
+        console.print(f"🎪 Finding environments older than {older_than}")
+        prs_with_shows = github.find_prs_with_shows()
+
+        if not prs_with_shows:
+            console.print("🎪 [dim]No PRs with circus tent labels found[/dim]")
+        else:
+            console.print(f"🎪 Found {len(prs_with_shows)} PRs with shows")
+
+            import re
+            from datetime import datetime, timedelta
+
+            from .core.circus import PullRequest
+
+            # Parse the older_than parameter (e.g., "48h", "7d")
+            time_match = re.match(r"(\d+)([hd])", older_than)
+            if not time_match:
+                console.print(f"🎪 [bold red]Invalid time format:[/bold red] {older_than}")
+                return
+
+            hours = int(time_match.group(1))
+            if time_match.group(2) == "d":
+                hours *= 24
+
+            cutoff_time = datetime.now() - timedelta(hours=hours)
+
+            cleaned_prs = 0
+            for pr_number in prs_with_shows:
+                try:
+                    pr = PullRequest.from_id(pr_number, github)
+                    expired_shows = []
+
+                    # Check all shows in the PR for expiration
+                    for show in pr.shows:
+                        if show.created_at:
+                            try:
+                                # Parse timestamp (format: 2024-01-15T14-30)
+                                show_time = datetime.fromisoformat(
+                                    show.created_at.replace("-", ":")
+                                )
+                                if show_time < cutoff_time:
+                                    expired_shows.append(show)
+                            except (ValueError, AttributeError):
+                                # If we can't parse the timestamp, consider it expired
+                                expired_shows.append(show)
+
+                    if expired_shows:
+                        if dry_run:
+                            console.print(
+                                f"🎪 [yellow]Would clean {len(expired_shows)} expired shows from PR #{pr_number}[/yellow]"
+                            )
+                            for show in expired_shows:
+                                console.print(f"   - SHA {show.sha} ({show.status})")
+                        else:
+                            console.print(
+                                f"🎪 Cleaning {len(expired_shows)} expired shows from PR #{pr_number}"
+                            )
+
+                            # Remove circus labels for expired shows
+                            current_labels = github.get_circus_labels(pr_number)
+                            labels_to_keep = []
+
+                            for label in current_labels:
+                                # Keep labels that don't belong to expired shows
+                                should_keep = True
+                                for expired_show in expired_shows:
+                                    if expired_show.sha in label:
+                                        should_keep = False
+                                        break
+                                if should_keep:
+                                    labels_to_keep.append(label)
+
+                            # Update PR labels
+                            github.remove_circus_labels(pr_number)
+                            for label in labels_to_keep:
+                                github.add_label(pr_number, label)
+
+                            cleaned_prs += 1
+
+                except Exception as e:
+                    console.print(f"🎪 [red]Error processing PR #{pr_number}:[/red] {e}")
+
+            if not dry_run and cleaned_prs > 0:
+                console.print(f"🎪 [green]Cleaned up environments from {cleaned_prs} PRs[/green]")
+
+        # Step 2: Clean up SHA-based label definitions from repository
+        if cleanup_labels:
+            console.print("🎪 Finding SHA-based labels in repository")
+            sha_labels = github.cleanup_sha_labels(dry_run=dry_run)
+
+            if sha_labels:
+                if dry_run:
+                    console.print(
+                        f"🎪 [yellow]Would delete {len(sha_labels)} SHA-based label definitions:[/yellow]"
+                    )
+                    for label in sha_labels[:10]:  # Show first 10
+                        console.print(f"   - {label}")
+                    if len(sha_labels) > 10:
+                        console.print(f"   ... and {len(sha_labels) - 10} more")
+                else:
+                    console.print(
+                        f"🎪 [green]Deleted {len(sha_labels)} SHA-based label definitions[/green]"
+                    )
+            else:
+                console.print("🎪 [dim]No SHA-based labels found to clean[/dim]")
 
     except Exception as e:
         console.print(f"🎪 [bold red]Error during cleanup:[/bold red] {e}")
@@ -561,8 +856,24 @@ def _handle_start_trigger(
     try:
         # Get latest SHA and GitHub actor
         latest_sha = github.get_latest_commit_sha(pr_number)
-        # TODO: Get actual GitHub actor from GHA context
-        github_actor = os.getenv("GITHUB_ACTOR", "")  # Empty if unknown
+        github_actor = os.getenv("GITHUB_ACTOR", DEFAULT_GITHUB_ACTOR)
+
+        # Post confirmation comment
+        workflow_url = (
+            os.getenv("GITHUB_SERVER_URL", "https://github.com")
+            + f"/{os.getenv('GITHUB_REPOSITORY', 'repo')}/actions/runs/{os.getenv('GITHUB_RUN_ID', 'run')}"
+        )
+
+        confirmation_comment = f"""🎪 @{github_actor} Creating ephemeral environment for commit `{latest_sha[:7]}`
+
+**Action:** [View workflow]({workflow_url})
+**Environment:** `{latest_sha[:7]}`
+**Powered by:** [Superset Showtime](https://github.com/mistercrunch/superset-showtime)
+
+*Building and deploying... Watch the labels for progress updates.*"""
+
+        if not dry_run_github:
+            github.post_comment(pr_number, confirmation_comment)
 
         # Create new show
         show = Show(
@@ -631,18 +942,189 @@ def _handle_start_trigger(
                     "🎪 [bold yellow]DRY-RUN-GITHUB[/bold yellow] - Would update to running state"
                 )
 
+            # Post success comment (only in dry-run-aws mode since we have mock IP)
+            success_comment = f"""🎪 @{github_actor} Environment ready at **http://{mock_ip}:8080**
+
+**Environment:** `{show.sha}`
+**Credentials:** admin / admin
+**TTL:** {show.ttl} (auto-cleanup)
+
+**Feature flags:** Add `🎪 conf-enable-ALERTS` labels to configure
+**Updates:** Environment updates automatically on new commits
+
+*Powered by [Superset Showtime](https://github.com/mistercrunch/superset-showtime)*"""
+
+            if not dry_run_github:
+                github.post_comment(pr_number, success_comment)
+
         else:
-            # TODO: Real AWS operations
-            console.print("🎪 [bold yellow]Real AWS logic not yet implemented[/bold yellow]")
+            # Real AWS operations
+            from .core.aws import AWSInterface, EnvironmentResult
+
+            console.print("🎪 [bold blue]Starting AWS deployment...[/bold blue]")
+            aws = AWSInterface()
+
+            # Show logs URL immediately for monitoring
+            _show_service_urls(pr_number, "deployment", latest_sha[:7])
+
+            # Parse feature flags from PR description (replicate GHA feature flag logic)
+            feature_flags = _extract_feature_flags_from_pr(pr_number, github)
+
+            # Create environment (synchronous, matches GHA wait behavior)
+            result: EnvironmentResult = aws.create_environment(
+                pr_number=pr_number,
+                sha=latest_sha,
+                github_user=github_actor,
+                feature_flags=feature_flags,
+            )
+
+            if result.success:
+                console.print(
+                    f"🎪 [bold green]✅ Green service deployed successfully![/bold green] IP: {result.ip}"
+                )
+
+                # Show helpful links for the new service
+                console.print("\n🎪 [bold blue]Useful Links:[/bold blue]")
+                console.print(f"   🌐 Environment: http://{result.ip}:8080")
+                console.print(
+                    f"   📊 ECS Service: https://us-west-2.console.aws.amazon.com/ecs/v2/clusters/superset-ci/services/{result.service_name}"
+                )
+                console.print(
+                    f"   📝 Service Logs: https://us-west-2.console.aws.amazon.com/ecs/v2/clusters/superset-ci/services/{result.service_name}/logs?region=us-west-2"
+                )
+                console.print(
+                    f"   🔍 GitHub PR: https://github.com/apache/superset/pull/{pr_number}"
+                )
+                console.print(
+                    "\n🎪 [dim]Note: Superset takes 2-3 minutes to initialize after container starts[/dim]"
+                )
+
+                # Blue-Green Traffic Switch: Update GitHub labels to point to new service
+                console.print(
+                    f"\n🎪 [bold blue]Switching traffic to green service {latest_sha[:7]}...[/bold blue]"
+                )
+
+                # Check for existing services to show blue-green transition
+                from .core.aws import AWSInterface
+
+                aws = AWSInterface()
+                existing_services = aws._find_pr_services(pr_number)
+
+                if len(existing_services) > 1:
+                    console.print("🔄 Blue-Green Deployment:")
+                    blue_services = []
+                    for svc in existing_services:
+                        if svc["sha"] == latest_sha[:7]:
+                            console.print(
+                                f"   🟢 Green: {svc['service_name']} (NEW - receiving traffic)"
+                            )
+                        else:
+                            console.print(
+                                f"   🔵 Blue: {svc['service_name']} (OLD - will be cleaned up in 5 minutes)"
+                            )
+                            blue_services.append(svc)
+
+                    # Schedule cleanup of blue services
+                    if blue_services:
+                        console.print(
+                            f"\n🧹 Scheduling cleanup of {len(blue_services)} blue service(s) in 5 minutes..."
+                        )
+                        _schedule_blue_cleanup(pr_number, blue_services)
+
+                # Update to running state with new SHA
+                show.status = "running"
+                show.ip = result.ip
+
+                # Traffic switching happens here - update GitHub labels atomically
+                running_labels = show.to_circus_labels()
+                console.print("\n🎪 Setting running state labels (traffic switch):")
+                for label in running_labels:
+                    console.print(f"  + {label}")
+
+                if not dry_run_github:
+                    console.print("🎪 Executing traffic switch via GitHub labels...")
+                    # Remove existing circus labels first
+                    github.remove_circus_labels(pr_number)
+                    # Add new running labels - this switches traffic atomically
+                    for label in running_labels:
+                        github.add_label(pr_number, label)
+                    console.print("🎪 ✅ Labels updated to running state!")
+
+                    # Post success comment with real IP
+                    success_comment = f"""🎪 @{github_actor} Environment ready at **http://{result.ip}:8080**
+
+**Environment:** `{show.sha}`
+**Credentials:** admin / admin
+**TTL:** {show.ttl} (auto-cleanup)
+**Feature flags:** {len(feature_flags)} enabled
+
+**Feature flags:** Add `🎪 conf-enable-ALERTS` labels to configure
+**Updates:** Environment updates automatically on new commits
+
+*Powered by [Superset Showtime](https://github.com/mistercrunch/superset-showtime)*"""
+
+                    github.post_comment(pr_number, success_comment)
+
+            else:
+                console.print(f"🎪 [bold red]❌ AWS deployment failed:[/bold red] {result.error}")
+
+                # Update to failed state
+                show.status = "failed"
+                failed_labels = show.to_circus_labels()
+
+                if not dry_run_github:
+                    console.print("🎪 Setting failed state labels...")
+                    github.remove_circus_labels(pr_number)
+                    for label in failed_labels:
+                        github.add_label(pr_number, label)
+
+                    # Post failure comment
+                    failure_comment = f"""🎪 @{github_actor} Environment creation failed.
+
+**Error:** {result.error}
+**Environment:** `{show.sha}`
+
+Please check the logs and try again.
+
+*Powered by [Superset Showtime](https://github.com/mistercrunch/superset-showtime)*"""
+
+                    github.post_comment(pr_number, failure_comment)
 
     except Exception as e:
         console.print(f"🎪 [bold red]Start trigger failed:[/bold red] {e}")
+
+
+def _extract_feature_flags_from_pr(pr_number: int, github: GitHubInterface) -> list:
+    """Extract feature flags from PR description (replicate GHA eval-feature-flags step)"""
+    import re
+
+    try:
+        # Get PR description
+        pr_data = github.get_pr_data(pr_number)
+        description = pr_data.get("body") or ""
+
+        # Replicate exact GHA regex pattern: FEATURE_(\w+)=(\w+)
+        pattern = r"FEATURE_(\w+)=(\w+)"
+        results = []
+
+        for match in re.finditer(pattern, description):
+            config = {"name": f"SUPERSET_FEATURE_{match.group(1)}", "value": match.group(2)}
+            results.append(config)
+            console.print(f"🎪 Found feature flag: {config['name']}={config['value']}")
+
+        return results
+
+    except Exception as e:
+        console.print(f"🎪 Warning: Could not extract feature flags: {e}")
+        return []
 
 
 def _handle_stop_trigger(
     pr_number: int, github: GitHubInterface, dry_run_aws: bool = False, dry_run_github: bool = False
 ):
     """Handle stop trigger"""
+    import os
+
     console.print(f"🎪 Stopping environment for PR #{pr_number}")
 
     try:
@@ -660,13 +1142,75 @@ def _handle_stop_trigger(
             console.print(f"  - ECS service: {show.aws_service_name}")
             console.print(f"  - ECR image: {show.aws_image_tag}")
         else:
-            # TODO: Real AWS cleanup
-            console.print("🎪 [bold yellow]Real AWS cleanup not yet implemented[/bold yellow]")
+            # Real AWS cleanup (replicate ephemeral-env-pr-close.yml logic)
+            from .core.aws import AWSInterface
+
+            console.print("🎪 [bold blue]Starting AWS cleanup...[/bold blue]")
+            aws = AWSInterface()
+
+            # Show logs URL for monitoring cleanup
+            _show_service_urls(pr_number, "cleanup")
+
+            try:
+                # Step 1: Check if ECS service exists and is active (replicate GHA describe-services)
+                service_name = f"pr-{pr_number}-service"  # Match GHA service naming
+                console.print(f"🎪 Checking ECS service: {service_name}")
+
+                service_exists = aws._service_exists(service_name)
+
+                if service_exists:
+                    console.print(f"🎪 Found active ECS service: {service_name}")
+
+                    # Step 2: Delete ECS service (replicate GHA delete-service)
+                    console.print("🎪 Deleting ECS service...")
+                    success = aws._delete_ecs_service(service_name)
+
+                    if success:
+                        console.print("🎪 ✅ ECS service deleted successfully")
+
+                        # Step 3: Delete ECR image tag (replicate GHA batch-delete-image)
+                        image_tag = f"pr-{pr_number}-ci"  # Match GHA image tag format
+                        console.print(f"🎪 Deleting ECR image tag: {image_tag}")
+
+                        ecr_success = aws._delete_ecr_image(image_tag)
+
+                        if ecr_success:
+                            console.print("🎪 ✅ ECR image deleted successfully")
+                        else:
+                            console.print("🎪 ⚠️ ECR image deletion failed (may not exist)")
+
+                        console.print(
+                            "🎪 [bold green]✅ AWS cleanup completed successfully![/bold green]"
+                        )
+
+                    else:
+                        console.print("🎪 [bold red]❌ ECS service deletion failed[/bold red]")
+
+                else:
+                    console.print(f"🎪 No active ECS service found: {service_name}")
+                    console.print("🎪 ✅ No AWS resources to clean up")
+
+            except Exception as e:
+                console.print(f"🎪 [bold red]❌ AWS cleanup failed:[/bold red] {e}")
 
         # Remove all circus labels for this PR
         console.print(f"🎪 Removing all circus labels for PR #{pr_number}")
-        # TODO: Actually remove labels
-        # github.remove_circus_labels(pr_number)
+        if not dry_run_github:
+            github.remove_circus_labels(pr_number)
+
+        # Post cleanup comment
+        github_actor = os.getenv("GITHUB_ACTOR", DEFAULT_GITHUB_ACTOR)
+        cleanup_comment = f"""🎪 @{github_actor} Environment `{show.sha}` cleaned up
+
+**AWS Resources:** ECS service and ECR image deleted
+**Cost Impact:** No further charges
+
+Add `🎪 trigger-start` to create a new environment.
+
+*Powered by [Superset Showtime](https://github.com/mistercrunch/superset-showtime)*"""
+
+        if not dry_run_github:
+            github.post_comment(pr_number, cleanup_comment)
 
         console.print("🎪 [bold green]Environment stopped![/bold green]")
 
@@ -727,6 +1271,23 @@ def _handle_sync_trigger(
 
             console.print("🎪 [bold green]Mock rolling update complete![/bold green]")
             console.print(f"🎪 Traffic switched to {new_show.sha} at {new_show.ip}")
+
+            # Post rolling update success comment
+            import os
+
+            github_actor = os.getenv("GITHUB_ACTOR", DEFAULT_GITHUB_ACTOR)
+            update_comment = f"""🎪 Environment updated: {pr.current_show.sha} → `{new_show.sha}`
+
+**New Environment:** http://{new_show.ip}:8080
+**Update:** Zero-downtime rolling deployment
+**Old Environment:** Automatically cleaned up
+
+Your latest changes are now live.
+
+*Powered by [Superset Showtime](https://github.com/mistercrunch/superset-showtime)*"""
+
+            if not dry_run_github:
+                github.post_comment(pr_number, update_comment)
 
         else:
             # TODO: Real rolling update

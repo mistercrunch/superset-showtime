@@ -1,4 +1,4 @@
-name: 🎪 Circus Cleanup
+name: 🎪 Showtime Cleanup
 
 # Scheduled cleanup of expired environments
 on:
@@ -12,14 +12,10 @@ on:
         description: 'Maximum age in hours before cleanup'
         required: false
         default: '48'
-      dry_run:
-        description: 'Dry run - show what would be cleaned'
-        required: false
-        default: 'false'
 
 jobs:
   cleanup-expired:
-    name: Clean up expired circus environments
+    name: Clean up expired showtime environments
     runs-on: ubuntu-latest
 
     permissions:
@@ -36,15 +32,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_REGION: us-west-2
-          GITHUB_ORG: apache
-          GITHUB_REPO: superset
+          AWS_REGION: ${{ vars.AWS_REGION || 'us-west-2' }}
+          GITHUB_ORG: ${{ github.repository_owner }}
+          GITHUB_REPO: ${{ github.event.repository.name }}
         run: |
           MAX_AGE="${{ github.event.inputs.max_age_hours || '48' }}"
-          DRY_RUN="${{ github.event.inputs.dry_run || 'false' }}"
-
-          if [ "$DRY_RUN" = "true" ]; then
-            python -m showtime cleanup --dry-run --older-than "${MAX_AGE}h"
-          else
-            python -m showtime cleanup --older-than "${MAX_AGE}h"
-          fi
+          python -m showtime cleanup --older-than "${MAX_AGE}h"

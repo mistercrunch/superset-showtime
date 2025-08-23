@@ -17,7 +17,7 @@ def test_show_from_circus_labels():
         "🎪 abc123f 🚦 running",
         "🎪 🎯 abc123f",
         "🎪 abc123f 📅 2024-01-15T14-30",
-        "🎪 abc123f 🌐 52-1-2-3",
+        "🎪 abc123f 🌐 52.1.2.3:8080",  # New format with dots and port
         "🎪 abc123f ⌛ 24h",
         "🎪 abc123f 🤡 maxime",
         "some-other-label",  # Should be ignored
@@ -29,7 +29,7 @@ def test_show_from_circus_labels():
     assert show.status == "running"
     assert show.sha == "abc123f"
     assert show.created_at == "2024-01-15T14-30"
-    assert show.ip == "52.1.2.3"  # Dashes converted to dots
+    assert show.ip == "52.1.2.3"  # Port removed during parsing
     assert show.ttl == "24h"
     assert show.requested_by == "maxime"
 
@@ -94,7 +94,7 @@ def test_show_to_circus_labels():
         "🎪 abc123f 🚦 running",
         "🎪 🎯 abc123f",
         "🎪 abc123f 📅 2024-01-15T14-30",
-        "🎪 abc123f 🌐 52-1-2-3",  # IP with dashes
+        "🎪 abc123f 🌐 52.1.2.3:8080",  # IP with dots and port
         "🎪 abc123f ⌛ 48h",
         "🎪 abc123f 🤡 maxime",
         "🎪 abc123f ⚙️ debug,alerts",

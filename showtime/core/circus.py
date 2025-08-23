@@ -67,7 +67,7 @@ class Show:
         ]
 
         if self.ip:
-            labels.append(f"🎪 {self.sha} 🌐 {self.ip.replace('.', '-')}")
+            labels.append(f"🎪 {self.sha} 🌐 {self.ip}:8080")
 
         if self.requested_by:
             labels.append(f"🎪 {self.sha} 🤡 {self.requested_by}")
@@ -106,8 +106,8 @@ class Show:
                     show_data["status"] = value
                 elif emoji == "📅":  # Timestamp
                     show_data["created_at"] = value
-                elif emoji == "🌐":  # IP
-                    show_data["ip"] = value.replace("-", ".")
+                elif emoji == "🌐":  # IP with port
+                    show_data["ip"] = value.replace(":8080", "")  # Remove port for storage
                 elif emoji == "⌛":  # TTL
                     show_data["ttl"] = value
                 elif emoji == "🤡":  # User (clown!)
@@ -265,6 +265,20 @@ def merge_config(current_config: str, command: str) -> str:
         feature = command.replace("disable-", "").lower()
         configs = [c for c in configs if c != feature]
         configs.append(f"no-{feature}")
+        
+    # Handle debug toggle commands
+    elif command == "debug-on":
+        configs = [c for c in configs if c != "debug"]
+        configs.append("debug")
+        
+    elif command == "debug-off":
+        configs = [c for c in configs if c != "debug"]
+        
+    # Handle size commands
+    elif command.startswith("size-"):
+        size = command  # Keep full size command
+        configs = [c for c in configs if not c.startswith("size-")]
+        configs.append(size)
 
     # Return cleaned config
     unique_configs = list(dict.fromkeys(configs))  # Remove duplicates, preserve order

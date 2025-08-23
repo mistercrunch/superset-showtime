@@ -4,10 +4,11 @@
 Replicates the AWS logic from current GitHub Actions workflows.
 """
 
+import json
 import os
-import subprocess
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import boto3
@@ -50,45 +51,90 @@ class AWSInterface:
         self.security_group = "sg-092ff3a6ae0574d91"
 
     def create_environment(
-        self, pr_number: int, sha: str, github_user: str = "unknown"
+        self,
+        pr_number: int,
+        sha: str,
+        github_user: str = "unknown",
+        feature_flags: List[Dict[str, str]] = None,
     ) -> EnvironmentResult:
         """
-        Create ephemeral environment - replicates GHA logic
+        Create ephemeral environment with blue-green deployment support
 
-        Steps:
-        1. Build Docker image with supersetbot
-        2. Push to ECR with PR+SHA tag
-        3. Create ECS service
-        4. Wait for deployment
-        5. Get public IP
+        Blue-Green Steps:
+        1. Check if ECR image exists
+        2. Create Show object for consistent naming
+        3. Check for existing services (blue)
+        4. Create new service with SHA (green)
+        5. Wait for deployment stability
+        6. Get public IP and return for traffic switching
         """
-        service_name = f"pr-{pr_number}-{sha[:7]}"
-        image_tag = f"pr-{pr_number}-{sha[:7]}-ci"
+        from datetime import datetime
+
+        from .circus import Show
+
+        # Create Show object for consistent AWS naming
+        show = Show(
+            pr_number=pr_number,
+            sha=sha[:7],  # Truncate to 7 chars like GitHub
+            status="building",
+            created_at=datetime.utcnow().strftime("%Y-%m-%dT%H-%M"),
+            requested_by=github_user,
+        )
+
+        service_name = f"{show.aws_service_name}-service"  # pr-{pr_number}-{sha}-service
+        image_tag = show.aws_image_tag  # pr-{pr_number}-{sha}-ci
 
         try:
-            # Step 1: Build Docker image (replicate supersetbot logic)
-            success = self._build_docker_image(sha, image_tag)
-            if not success:
-                return EnvironmentResult(success=False, error="Docker build failed")
-
-            # Step 2: Push to ECR
-            success = self._push_to_ecr(image_tag)
-            if not success:
-                return EnvironmentResult(success=False, error="ECR push failed")
-
-            # Step 3: Check if service already exists
-            if self._service_exists(service_name):
+            # Step 1: Check if ECR image exists (replicate GHA check-image step)
+            if not self._check_ecr_image_exists(image_tag):
                 return EnvironmentResult(
-                    success=False, error=f"Service {service_name} already exists"
+                    success=False,
+                    error=f"Container image {image_tag} not found in ECR. Build the image first.",
                 )
 
-            # Step 4: Create ECS service
-            success = self._create_ecs_service(service_name, image_tag, pr_number, github_user)
-            if not success:
-                return EnvironmentResult(success=False, error="ECS service creation failed")
+            # Step 2: Create/update ECS task definition with feature flags
+            task_def_arn = self._create_task_definition_with_image_and_flags(
+                image_tag, feature_flags or []
+            )
+            if not task_def_arn:
+                return EnvironmentResult(success=False, error="Failed to create task definition")
 
-            # Step 5: Wait for deployment and get IP
-            ip = self._wait_for_deployment_and_get_ip(service_name)
+            # Step 3: Blue-Green Logic - Check for existing services
+            print(f"🔍 Checking for existing services for PR #{pr_number}")
+            existing_services = self._find_pr_services(pr_number)
+
+            if existing_services:
+                print(
+                    f"📊 Found {len(existing_services)} existing services - starting blue-green deployment"
+                )
+                for svc in existing_services:
+                    print(f"   🔵 Blue: {svc['service_name']} ({svc['status']})")
+
+            # Step 4: Create new green service
+            print(f"🟢 Creating green service: {service_name}")
+            success = self._create_ecs_service(service_name, pr_number, github_user)
+            if not success:
+                return EnvironmentResult(success=False, error="Green service creation failed")
+
+            # Step 5: Deploy task definition to green service
+            success = self._deploy_task_definition(service_name, task_def_arn)
+            if not success:
+                return EnvironmentResult(
+                    success=False, error="Green task definition deployment failed"
+                )
+
+            # Step 6: Wait for service stability (replicate GHA wait-for-service-stability)
+            print(f"⏳ Waiting for service {service_name} to become stable...")
+            if not self._wait_for_service_stability(service_name):
+                return EnvironmentResult(success=False, error="Service failed to become stable")
+
+            # Step 7: Health check the new service
+            print(f"🏥 Health checking service {service_name}...")
+            if not self._health_check_service(service_name):
+                return EnvironmentResult(success=False, error="Service failed health checks")
+
+            # Step 8: Get IP after health checks pass
+            ip = self.get_environment_ip(service_name)
             if not ip:
                 return EnvironmentResult(success=False, error="Failed to get environment IP")
 
@@ -212,52 +258,79 @@ class AWSInterface:
         except Exception:
             return "unknown"
 
-    def _build_docker_image(self, sha: str, image_tag: str) -> bool:
-        """Build Docker image using supersetbot (replicate GHA logic)"""
+    def _check_ecr_image_exists(self, image_tag: str) -> bool:
+        """Check if ECR image exists (replicate GHA check-image step)"""
         try:
-            # Replicate: supersetbot docker --push --load --preset ci --platform linux/amd64
-            cmd = [
-                "supersetbot",
-                "docker",
-                "--push",
-                "--load",
-                "--preset",
-                "ci",
-                "--platform",
-                "linux/amd64",
-                "--context-ref",
-                sha,
-                "--extra-flags",
-                "--build-arg INCLUDE_CHROMIUM=false",
-            ]
+            # Get registry ID from ECR login
+            ecr_response = self.ecr_client.get_authorization_token()
+            registry_id = ecr_response["authorizationData"][0]["proxyEndpoint"]
+            registry_id = registry_id.split(".")[0].replace("https://", "")
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            return result.returncode == 0
+            # Replicate exact GHA describe-images command
+            self.ecr_client.describe_images(
+                registryId=registry_id,
+                repositoryName=self.repository,
+                imageIds=[{"imageTag": image_tag}],
+            )
 
-        except FileNotFoundError:
-            # supersetbot not available - this is expected in CLI usage
+            print(f"✅ Found ECR image: {image_tag}")
+            return True
+
+        except self.ecr_client.exceptions.ImageNotFoundException:
+            print(f"❌ ECR image not found: {image_tag}")
             return False
-        except Exception:
+        except Exception as e:
+            print(f"❌ ECR image check failed: {e}")
             return False
 
-    def _push_to_ecr(self, image_tag: str) -> bool:
-        """Push image to ECR (replicate GHA logic)"""
+    def _create_task_definition_with_image_and_flags(
+        self, image_tag: str, feature_flags: List[Dict[str, str]]
+    ) -> Optional[str]:
+        """Create ECS task definition with image and feature flags (replicate GHA task-def + env vars)"""
         try:
-            # Get ECR registry URL
+            # Load base task definition template
+            task_def_path = Path(__file__).parent.parent / "data" / "ecs-task-definition.json"
+            with open(task_def_path) as f:
+                task_def = json.load(f)
+
+            # Get ECR registry for full image URL
             ecr_response = self.ecr_client.get_authorization_token()
             registry_url = ecr_response["authorizationData"][0]["proxyEndpoint"]
             registry_url = registry_url.replace("https://", "")
+            full_image_url = f"{registry_url}/{self.repository}:{image_tag}"
 
-            # Tag and push image
-            full_tag = f"{registry_url}/{self.repository}:{image_tag}"
+            # Update image in container definition (replicate GHA render-task-definition)
+            task_def["containerDefinitions"][0]["image"] = full_image_url
 
-            # Docker tag and push
-            subprocess.run(["docker", "tag", f"apache/superset:{image_tag}", full_tag])
-            result = subprocess.run(["docker", "push", full_tag], capture_output=True)
+            # Add feature flags to environment (replicate GHA jq environment update)
+            container_env = task_def["containerDefinitions"][0]["environment"]
+            for flag in feature_flags:
+                container_env.append(flag)
 
-            return result.returncode == 0
+            # Register task definition
+            response = self.ecs_client.register_task_definition(**task_def)
+            task_def_arn = response["taskDefinition"]["taskDefinitionArn"]
 
-        except Exception:
+            print(f"✅ Created task definition: {task_def_arn}")
+            return task_def_arn
+
+        except Exception as e:
+            print(f"❌ Task definition creation failed: {e}")
+            return None
+
+    def _deploy_task_definition(self, service_name: str, task_def_arn: str) -> bool:
+        """Deploy task definition to service (replicate GHA deploy-task step)"""
+        try:
+            # Replicate exact GHA deploy-task-definition parameters
+            self.ecs_client.update_service(
+                cluster=self.cluster, service=service_name, taskDefinition=task_def_arn
+            )
+
+            print(f"✅ Updated service {service_name} with task definition")
+            return True
+
+        except Exception as e:
+            print(f"❌ Task definition deployment failed: {e}")
             return False
 
     def _service_exists(self, service_name: str) -> bool:
@@ -276,45 +349,41 @@ class AWSInterface:
         except Exception:
             return False
 
-    def _create_ecs_service(
-        self, service_name: str, image_tag: str, pr_number: int, github_user: str
-    ) -> bool:
-        """Create ECS service (replicate GHA logic)"""
+    def _create_ecs_service(self, service_name: str, pr_number: int, github_user: str) -> bool:
+        """Create ECS service (replicate exact GHA create-service step)"""
         try:
-            # Get ECR registry for full image URL
-            ecr_response = self.ecr_client.get_authorization_token()
-            registry_url = ecr_response["authorizationData"][0]["proxyEndpoint"]
-            registry_url = registry_url.replace("https://", "")
-
-            full_image_url = f"{registry_url}/{self.repository}:{image_tag}"
-
-            # Create ECS service (replicate exact GHA parameters)
-            self.ecs_client.create_service(
+            # Replicate exact GHA create-service command parameters
+            response = self.ecs_client.create_service(
                 cluster=self.cluster,
-                serviceName=service_name,
-                taskDefinition=self.cluster,  # Uses same name as cluster
+                serviceName=service_name,  # pr-{pr_number}-service
+                taskDefinition=self.cluster,  # Uses cluster name as task def family
                 launchType="FARGATE",
                 desiredCount=1,
                 platformVersion="LATEST",
                 networkConfiguration={
                     "awsvpcConfiguration": {
-                        "subnets": self.subnets,
-                        "securityGroups": [self.security_group],
+                        "subnets": self.subnets,  # Same subnets as GHA
+                        "securityGroups": [self.security_group],  # Same SG as GHA
                         "assignPublicIp": "ENABLED",
                     }
                 },
                 tags=[
                     {"key": "pr", "value": str(pr_number)},
                     {"key": "github_user", "value": github_user},
-                    {"key": "circus_sha", "value": service_name.split("-")[-1]},
-                    {"key": "circus_created", "value": str(int(time.time()))},
+                    {"key": "showtime_created", "value": str(int(time.time()))},
+                    {
+                        "key": "showtime_expires",
+                        "value": str(int(time.time()) + 48 * 3600),
+                    },  # 48 hours
+                    {"key": "showtime_managed", "value": "true"},
                 ],
             )
 
+            print(f"✅ Created ECS service: {service_name}")
             return True
 
         except Exception as e:
-            print(f"ECS service creation failed: {e}")
+            print(f"❌ ECS service creation failed: {e}")
             return False
 
     def _wait_for_deployment_and_get_ip(
@@ -458,4 +527,232 @@ class AWSInterface:
 
         except Exception as e:
             print(f"Feature flag update failed: {e}")
+            return False
+
+    def _delete_ecs_service(self, service_name: str) -> bool:
+        """Delete ECS service (replicate GHA delete-service step)"""
+        try:
+            # Replicate exact GHA delete-service command with --force
+            self.ecs_client.delete_service(cluster=self.cluster, service=service_name, force=True)
+
+            print(f"✅ Deleted ECS service: {service_name}")
+            return True
+
+        except Exception as e:
+            print(f"❌ ECS service deletion failed: {e}")
+            return False
+
+    def _delete_ecr_image(self, image_tag: str) -> bool:
+        """Delete ECR image tag (replicate GHA batch-delete-image step)"""
+        try:
+            # Get registry ID for ECR operations
+            ecr_response = self.ecr_client.get_authorization_token()
+            registry_id = ecr_response["authorizationData"][0]["proxyEndpoint"]
+            registry_id = registry_id.split(".")[0].replace("https://", "")
+
+            # Replicate exact GHA batch-delete-image command
+            self.ecr_client.batch_delete_image(
+                registryId=registry_id,
+                repositoryName=self.repository,
+                imageIds=[{"imageTag": image_tag}],
+            )
+
+            print(f"✅ Deleted ECR image: {image_tag}")
+            return True
+
+        except self.ecr_client.exceptions.ImageNotFoundException:
+            print(f"⚠️ ECR image not found: {image_tag} (already deleted)")
+            return True  # Consider this success since it's already gone
+        except Exception as e:
+            print(f"❌ ECR image deletion failed: {e}")
+            return False
+
+    def find_expired_services(self, older_than: str) -> List[Dict[str, Any]]:
+        """Find ECS services managed by showtime that are expired"""
+        import re
+        import time
+
+        try:
+            # Parse older_than (e.g., "48h", "7d")
+            time_match = re.match(r"(\d+)([hd])", older_than)
+            if not time_match:
+                return []
+
+            hours = int(time_match.group(1))
+            if time_match.group(2) == "d":
+                hours *= 24
+
+            cutoff_timestamp = time.time() - (hours * 3600)
+            expired_services = []
+
+            # List all services in cluster
+            response = self.ecs_client.list_services(cluster=self.cluster)
+
+            for service_arn in response.get("serviceArns", []):
+                service_name = service_arn.split("/")[-1]
+
+                # Only check services that match showtime pattern: pr-{number}-service
+                if not service_name.startswith("pr-") or not service_name.endswith("-service"):
+                    continue
+
+                try:
+                    # Get service tags to check expiration
+                    tags_response = self.ecs_client.list_tags_for_resource(resourceArn=service_arn)
+                    tags = {tag["key"]: tag["value"] for tag in tags_response.get("tags", [])}
+
+                    # Only process services managed by showtime
+                    if tags.get("showtime_managed") != "true":
+                        continue
+
+                    # Check if expired
+                    expires_timestamp = tags.get("showtime_expires")
+                    created_timestamp = tags.get("showtime_created")
+
+                    if expires_timestamp and float(expires_timestamp) < time.time():
+                        # Extract PR number from service name: pr-1234-service -> 1234
+                        pr_match = re.match(r"pr-(\d+)-service", service_name)
+                        pr_number = int(pr_match.group(1)) if pr_match else None
+
+                        age_hours = (
+                            (time.time() - float(created_timestamp)) / 3600
+                            if created_timestamp
+                            else 0
+                        )
+
+                        expired_services.append(
+                            {
+                                "service_name": service_name,
+                                "service_arn": service_arn,
+                                "pr_number": pr_number,
+                                "age_hours": age_hours,
+                                "expires_timestamp": expires_timestamp,
+                                "tags": tags,
+                            }
+                        )
+
+                except Exception as e:
+                    print(f"⚠️ Could not check service {service_name}: {e}")
+                    continue
+
+            return expired_services
+
+        except Exception as e:
+            print(f"❌ Failed to find expired services: {e}")
+            return []
+
+    def _find_pr_services(self, pr_number: int) -> List[Dict[str, Any]]:
+        """Find all ECS services for a specific PR"""
+        try:
+            pr_services = []
+
+            # List all services in cluster
+            response = self.ecs_client.list_services(cluster=self.cluster)
+
+            for service_arn in response.get("serviceArns", []):
+                service_name = service_arn.split("/")[-1]
+
+                # Check if service matches PR pattern: pr-{number}-{sha}-service
+                if service_name.startswith(f"pr-{pr_number}-") and service_name.endswith(
+                    "-service"
+                ):
+                    try:
+                        # Get service details
+                        service_response = self.ecs_client.describe_services(
+                            cluster=self.cluster, services=[service_name]
+                        )
+
+                        if service_response["services"]:
+                            service = service_response["services"][0]
+
+                            # Extract SHA from service name: pr-1234-abc123f-service -> abc123f
+                            sha_match = service_name.replace(f"pr-{pr_number}-", "").replace(
+                                "-service", ""
+                            )
+
+                            pr_services.append(
+                                {
+                                    "service_name": service_name,
+                                    "service_arn": service_arn,
+                                    "sha": sha_match,
+                                    "status": service["status"],
+                                    "running_count": service["runningCount"],
+                                    "desired_count": service["desiredCount"],
+                                    "created_at": service["createdAt"],
+                                }
+                            )
+
+                    except Exception as e:
+                        print(f"⚠️ Could not check service {service_name}: {e}")
+                        continue
+
+            return pr_services
+
+        except Exception as e:
+            print(f"❌ Failed to find PR services: {e}")
+            return []
+
+    def _wait_for_service_stability(self, service_name: str, timeout_minutes: int = 10) -> bool:
+        """Wait for ECS service to become stable (replicate GHA wait-for-service-stability)"""
+        try:
+            # Use ECS waiter - same as GHA wait-for-service-stability
+            waiter = self.ecs_client.get_waiter("services_stable")
+            waiter.wait(
+                cluster=self.cluster,
+                services=[service_name],
+                WaiterConfig={"maxAttempts": timeout_minutes * 2},  # 30s intervals
+            )
+
+            print(f"✅ Service {service_name} is stable")
+            return True
+
+        except Exception as e:
+            print(f"❌ Service stability check failed: {e}")
+            return False
+
+    def _health_check_service(self, service_name: str, max_attempts: int = 6) -> bool:
+        """Health check service by testing HTTP response"""
+        import time
+
+        import httpx
+
+        try:
+            # Get service IP
+            ip = self.get_environment_ip(service_name)
+            if not ip:
+                print("❌ Could not get service IP for health check")
+                return False
+
+            health_url = f"http://{ip}:8080/health"  # Superset health endpoint
+            fallback_url = f"http://{ip}:8080/"  # Fallback to main page
+
+            for attempt in range(max_attempts):
+                try:
+                    with httpx.Client(timeout=10.0) as client:
+                        # Try health endpoint first
+                        try:
+                            response = client.get(health_url)
+                            if response.status_code == 200:
+                                print(f"✅ Health check passed on attempt {attempt + 1}")
+                                return True
+                        except httpx.RequestError:
+                            pass
+
+                        # Fallback to main page
+                        response = client.get(fallback_url)
+                        if response.status_code == 200:
+                            print(f"✅ Health check passed (main page) on attempt {attempt + 1}")
+                            return True
+
+                except Exception as e:
+                    print(f"⚠️ Health check attempt {attempt + 1} failed: {e}")
+
+                if attempt < max_attempts - 1:
+                    print("⏳ Waiting 30s before next health check attempt...")
+                    time.sleep(30)
+
+            print(f"❌ Health check failed after {max_attempts} attempts")
+            return False
+
+        except Exception as e:
+            print(f"❌ Health check error: {e}")
             return False
