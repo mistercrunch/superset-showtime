@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "superset-showtime"
-version = "0.2.0"
+dynamic = ["version"]
 description = "🎪 Apache Superset ephemeral environment management with circus tent emoji state tracking"
 readme = "README.md"
 license = "Apache-2.0"
@@ -92,6 +92,9 @@ showtime = "showtime.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["showtime"]
+
+[tool.hatch.version]
+path = "showtime/__init__.py"
 
 [tool.ruff]
 target-version = "py38"
