@@ -150,7 +150,16 @@ app = typer.Typer(
 [dim]CLI commands work with existing environments or dry-run new ones.[/dim]""",
     rich_markup_mode="rich",
 )
+
 console = Console()
+
+
+@app.command()
+def version():
+    """Show version information"""
+    from . import __version__
+
+    console.print(f"🎪 Superset Showtime v{__version__}")
 
 
 @app.command()
