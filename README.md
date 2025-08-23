@@ -7,22 +7,34 @@
 
 ## 🎯 What is Showtime?
 
-Superset Showtime replaces the complex GitHub Actions scripts for ephemeral environments with a simple, powerful CLI tool that uses **circus tent emoji labels** for state management.
+Superset Showtime is a CLI tool designed primarily for **GitHub Actions** to manage Apache Superset ephemeral environments. It uses **circus tent emoji labels** as a visual state management system and depends on Superset's existing build infrastructure.
 
-### The Problem We Solve
+## 🚀 Quick Start for Superset Contributors
 
-**Current Superset ephemeral environment issues:**
-- 🚨 **Stale environments** - New commits don't update existing environments
-- 💸 **Resource waste** - Multiple environments per PR, no automatic cleanup
-- 🔧 **Hard to maintain** - Complex GitHub Actions logic scattered across workflows
-- 👀 **Poor visibility** - Hard to see what environments exist and their status
+**Create an ephemeral environment:**
+1. Go to your PR in GitHub
+2. Add label: `🎪 ⚡ showtime-trigger-start`
+3. Watch the magic happen - labels will update automatically
+4. When you see `🎪 🚦 {sha} running`, your environment is ready!
+5. Get URL from `🎪 🌐 {sha} {ip}` → `http://{ip}:8080`
+6. **Every new commit automatically deploys a fresh environment** (zero-downtime)
 
-### The Showtime Solution
+**To test a specific commit without auto-updates:**
+- Add label: `🎪 🧊 showtime-freeze` (prevents auto-sync on new commits)
+
+**Clean up when done:**
+```bash
+# Add this label:
+🎪 🛑 showtime-trigger-stop
+# All circus labels disappear, AWS resources cleaned up
+```
+
+## 🎪 How It Works
 
 **🎪 GitHub labels become a visual state machine:**
 ```bash
 # User adds trigger label in GitHub UI:
-🎪 trigger-start
+🎪 ⚡ showtime-trigger-start
 
 # System responds with state labels:
 🎪 abc123f 🚦 building      # Environment abc123f is building
@@ -36,52 +48,30 @@ Superset Showtime replaces the complex GitHub Actions scripts for ephemeral envi
 🎪 abc123f 🌐 52-1-2-3      # Available at http://52.1.2.3:8080
 ```
 
-## 🚀 Quick Start for Superset Contributors
+## 📊 For Maintainers (CLI Operations)
 
-### 1. As a Contributor (Using GitHub Labels)
+> **Note**: CLI is mainly for debugging or developing Showtime itself. Primary interface is GitHub labels above.
 
-**Create an ephemeral environment:**
-1. Go to your PR in GitHub
-2. Add label: `🎪 trigger-start`
-3. Watch the magic happen - labels will update automatically
-4. When you see `🎪 🚦 {sha} running`, your environment is ready!
-5. Get URL from `🎪 🌐 {sha} {ip}` → `http://{ip}:8080`
-
-**Configure your environment:**
-```bash
-# Add these labels to enable Superset feature flags:
-🎪 conf-enable-ALERTS              # Enable alerts feature
-🎪 conf-enable-DASHBOARD_RBAC      # Enable dashboard RBAC
-🎪 conf-disable-SSH_TUNNELING      # Disable SSH tunneling
-```
-
-**Clean up when done:**
-```bash
-# Add this label:
-🎪 trigger-stop
-# All circus labels disappear, AWS resources cleaned up
-```
-
-### 2. As a Maintainer (Using CLI)
-
-**Install the CLI:**
+**Install CLI for debugging:**
 ```bash
 pip install superset-showtime
 export GITHUB_TOKEN=your_token
 ```
 
-**Monitor all environments:**
+**Monitor and debug:**
 ```bash
 showtime list                    # See all active environments
-showtime status 1234            # Check specific PR environment
-showtime labels                 # Learn the complete label system
+showtime status 1234            # Debug specific environment
+showtime labels                 # Complete label reference
 ```
 
-**Test and debug:**
+**Testing/development:**
 ```bash
-showtime start 1234 --dry-run-aws      # Test environment creation
+showtime start 1234 --dry-run-aws      # Test without AWS costs
 showtime test-lifecycle 1234           # Full workflow simulation
 ```
+
+> **Dependency**: This CLI coordinates with Superset's existing GitHub Actions build infrastructure. It orchestrates environments but relies on Superset's build workflows for container creation.
 
 ## 🎪 Complete Label Reference
 
@@ -91,7 +81,6 @@ showtime test-lifecycle 1234           # Full workflow simulation
 |-------|---------|---------|
 | `🎪 ⚡ showtime-trigger-start` | Create environment | Builds and deploys ephemeral environment with blue-green deployment |
 | `🎪 🛑 showtime-trigger-stop` | Destroy environment | Cleans up AWS resources and removes all labels |
-| `🎪 🔄 showtime-trigger-sync` | Update to latest commit | Zero-downtime rolling update |
 | `🎪 🧊 showtime-freeze` | Freeze environment | Prevents auto-sync on new commits (for testing specific SHAs) |
 
 ### 📊 State Labels (Automatically Managed)
@@ -106,23 +95,17 @@ showtime test-lifecycle 1234           # Full workflow simulation
 | `🎪 {sha} ⌛ {ttl}` | Time-to-live policy | `🎪 abc123f ⌛ 24h` |
 | `🎪 {sha} 🤡 {username}` | Who requested | `🎪 abc123f 🤡 maxime` |
 
-## 🔧 Altering Feature Flags or Configuration
+## 🔧 Testing Configuration Changes
 
-**Recommendation**: Modify feature flags directly in your PR code instead of using labels.
+**Approach**: Modify configuration directly in your PR code, then trigger environment.
 
-**Why this approach is better**:
-✅ **Creates new SHA**: Testable, traceable, reviewable  
-✅ **Infinitely extensible**: Any configuration change possible  
-✅ **Code-based**: Changes are explicit and permanent  
-✅ **Git history**: Configuration changes are tracked  
-
-**Example workflow**:
-1. Modify `superset_config.py` with feature flag changes
-2. Push commit → Creates new SHA (e.g., `def456a`)  
-3. Add `🎪 ⚡ showtime-trigger-start` → Deploys with new config
+**Workflow**:
+1. Modify `superset_config.py` with your changes
+2. Push commit → Creates new SHA (e.g., `def456a`)
+3. Add `🎪 ⚡ showtime-trigger-start` → Deploys with your config
 4. Test environment reflects your exact code changes
 
-This keeps complexity in code where it belongs, not in label management!
+This approach creates traceable, reviewable changes that are part of your git history.
 
 ## 🔄 Complete Workflows
 
@@ -138,7 +121,7 @@ This keeps complexity in code where it belongs, not in label management!
 3. **Wait for completion:**
    ```
    🎪 abc123f 🚦 running       ← Now ready!
-   🎪 abc123f 🌐 52-1-2-3      ← Visit http://52.1.2.3:8080
+   🎪 abc123f 🌐 52.1.2.3:8080  ← Visit http://52.1.2.3:8080
    ```
 
 ### Testing Specific Commits
@@ -179,18 +162,18 @@ You'll see:
 - **❌ External contributors** cannot trigger environments (no write access to add labels)
 - **🔒 Secure by design** - only trusted users can create expensive AWS resources
 
-### How GitHub Actions Work
+### GitHub Actions Integration
 
-The new system replaces complex GHA scripts with simple ones:
+Showtime is designed to be called by Superset's GitHub Actions workflows:
 
 ```yaml
-# .github/workflows/circus.yml (replaces current ephemeral-env.yml)
+# .github/workflows/showtime.yml - Integrates with Superset's existing build workflows
 on:
   pull_request_target:
     types: [labeled, unlabeled, synchronize]
 
 jobs:
-  circus-handler:
+  showtime-handler:
     if: contains(github.event.label.name, '🎪')
     steps:
       - name: Install Showtime from PyPI
@@ -200,69 +183,70 @@ jobs:
         run: python -m showtime handle-trigger ${{ github.event.pull_request.number }}
 ```
 
-**Security benefits:**
-- **Always runs trusted code** (from PyPI, not PR code)
-- **Simple workflow logic** (just install CLI and run)
-- **Same permission model** as current system
+**Integration approach:**
+- **Coordinates with Superset builds** - Uses existing container build workflows
+- **Runs trusted code** (from PyPI, not PR code)
+- **Simple orchestration logic** (install CLI and run commands)
+- **Leverages existing infrastructure** - Same AWS resources and permissions
 
 ## 🛠️ Installation & Setup
 
 ### For Contributors (GitHub Labels Only)
-No installation needed! Just use the GitHub label system.
+No installation needed! Just use GitHub labels to trigger environments.
 
-### For Maintainers (CLI Access)
+### For Maintainers (Manual CLI Operations)
 
-**Install CLI:**
+**Install CLI for debugging/testing:**
 ```bash
 pip install superset-showtime
 export GITHUB_TOKEN=your_personal_access_token
 ```
 
-**Test CLI:**
+**Manual operations:**
 ```bash
-showtime list                    # See all active environments
-showtime status 1234            # Check specific environment
-showtime labels                 # Learn complete label system
+showtime list                    # Monitor all active environments
+showtime status 1234            # Debug specific environment
+showtime labels                 # Reference complete label system
 ```
 
-### For Repository Setup (One-Time)
+### For Repository Integration (GitHub Actions)
 
 **1. Install GitHub workflows:**
-Copy `.github/workflows/circus.yml` and `.github/workflows/circus-cleanup.yml` to your Superset repo.
+Copy `workflows-reference/showtime-trigger.yml` and `workflows-reference/showtime-cleanup.yml` to Superset's `.github/workflows/`.
 
-**2. Add repository secrets:**
-- `AWS_ACCESS_KEY_ID` (already exists)
-- `AWS_SECRET_ACCESS_KEY` (already exists)
-- `GITHUB_TOKEN` (already exists)
+**2. Configure secrets (already exist in Superset):**
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `GITHUB_TOKEN`
 
-**3. Replace old workflows:**
-Remove or disable the current `ephemeral-env.yml` and `ephemeral-env-pr-close.yml`.
+**3. Dependencies:**
+Showtime coordinates with Superset's existing build infrastructure - no additional setup needed.
 
-## 📊 CLI Commands Reference
+## 📊 CLI Reference (For Development/Debugging)
 
-### Core Commands
+> **Primary Interface**: Use GitHub labels in PR interface. CLI is mainly for maintainers debugging or developing Showtime itself.
+
+### Debugging Commands
 ```bash
-showtime start 1234                    # Create environment (latest SHA)
+showtime list                         # Monitor all environments
+showtime status 1234                  # Debug specific environment
+showtime labels                       # Complete label reference
+showtime test-lifecycle 1234          # Full workflow simulation
+```
+
+### Manual Operations (Advanced)
+```bash
+showtime start 1234                    # Manually create environment
 showtime start 1234 --sha abc123f     # Create environment (specific SHA)
-showtime start 1234 --force           # Force re-deployment
-showtime stop 1234                    # Delete environment
-showtime status 1234                  # Show environment status
-showtime list                         # List all environments with clickable links
-showtime sync 1234                    # Intelligent sync to desired state
-showtime cleanup --respect-ttl        # Clean up based on individual TTL labels
+showtime stop 1234                    # Manually delete environment
+showtime sync 1234                    # Force sync to desired state
+showtime cleanup --respect-ttl        # Manual cleanup
 ```
 
-### Testing & Development
+### GitHub Actions Commands
 ```bash
-showtime start 1234 --dry-run-aws          # Mock AWS, real GitHub labels
-showtime test-lifecycle 1234 --real-github # Full workflow simulation
-showtime handle-trigger 1234 --dry-run-aws # Simulate GitHub Actions
-```
-
-### Advanced Operations
-```bash
-showtime cleanup --older-than 48h          # Clean up old environments
-showtime list --status running --user maxime  # Filter environments
+showtime handle-trigger 1234          # Process trigger labels (called by GHA)
+showtime cleanup --older-than 48h     # Scheduled cleanup (called by GHA)
 ```
 
 ## 🎪 Benefits for Superset
@@ -271,7 +255,7 @@ showtime list --status running --user maxime  # Filter environments
 - **🎯 Simple workflow** - Just add/remove GitHub labels
 - **👀 Visual feedback** - See environment status in PR labels
 - **⚡ Automatic updates** - New commits update environments automatically
-- **🔧 Live configuration** - Enable/disable feature flags without rebuilding
+- **🔧 Configuration testing** - Test config changes through code commits
 
 ### For Maintainers
 - **📊 Complete visibility** - `showtime list` shows all environments
