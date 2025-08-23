@@ -5,9 +5,6 @@ Tests for circus tent emoji label parsing
 from showtime.core.circus import (
     PullRequest,
     Show,
-    is_configuration_label,
-    merge_config,
-    parse_configuration_command,
 )
 
 
@@ -32,18 +29,6 @@ def test_show_from_circus_labels():
     assert show.ip == "52.1.2.3"  # Port removed during parsing
     assert show.ttl == "24h"
     assert show.requested_by == "maxime"
-
-
-def test_show_with_config():
-    """Test Show with configuration"""
-    labels = ["🎪 def456a 🚦 running", "🎪 🎯 def456a", "🎪 def456a ⚙️ debug,alerts"]
-
-    show = Show.from_circus_labels(1234, labels, "def456a")
-
-    assert show is not None
-    assert show.status == "running"
-    assert show.sha == "def456a"
-    assert show.config == "debug,alerts"
 
 
 def test_pullrequest_during_update():
@@ -85,7 +70,6 @@ def test_show_to_circus_labels():
         created_at="2024-01-15T14-30",
         ttl="48h",
         requested_by="maxime",
-        config="debug,alerts",
     )
 
     labels = show.to_circus_labels()
@@ -97,52 +81,11 @@ def test_show_to_circus_labels():
         "🎪 abc123f 🌐 52.1.2.3:8080",  # IP with dots and port
         "🎪 abc123f ⌛ 48h",
         "🎪 abc123f 🤡 maxime",
-        "🎪 abc123f ⚙️ debug,alerts",
     ]
 
     # Check all expected labels are present
     for expected_label in expected:
         assert expected_label in labels
-
-
-def test_is_configuration_label():
-    """Test configuration label detection"""
-    assert is_configuration_label("🎪 conf-enable-ALERTS")
-    assert is_configuration_label("🎪 conf-debug-on")
-    assert not is_configuration_label("🎪 🚦 running")
-    assert not is_configuration_label("regular-label")
-
-
-def test_parse_configuration_command():
-    """Test parsing configuration commands"""
-    assert parse_configuration_command("🎪 conf-enable-ALERTS") == "enable-ALERTS"
-    assert parse_configuration_command("🎪 conf-debug-on") == "debug-on"
-    assert parse_configuration_command("🎪 🚦 running") is None
-
-
-def test_merge_config():
-    """Test configuration merging logic"""
-    # Enable feature
-    result = merge_config("standard", "enable-ALERTS")
-    assert "alerts" in result
-
-    # Disable feature
-    result = merge_config("alerts,debug", "disable-ALERTS")
-    assert "no-alerts" in result
-    assert "debug" in result
-
-    # Debug toggle
-    result = merge_config("standard", "debug-on")
-    assert "debug" in result
-
-    result = merge_config("debug,alerts", "debug-off")
-    assert "debug" not in result
-    assert "alerts" in result
-
-    # Size change
-    result = merge_config("debug", "size-large")
-    assert "size-large" in result
-    assert "debug" in result
 
 
 def test_show_properties():

@@ -73,11 +73,10 @@ class GitHubInterface:
 
     def add_label(self, pr_number: int, label: str) -> None:
         """Add a label to a PR (automatically creates label definition if needed)"""
-        from .label_colors import get_label_color, get_label_description
-        
+
         # Ensure label definition exists with proper color/description
         self._ensure_label_definition_exists(label)
-        
+
         url = f"{self.base_url}/repos/{self.org}/{self.repo}/issues/{pr_number}/labels"
 
         with httpx.Client() as client:
@@ -87,7 +86,7 @@ class GitHubInterface:
     def _ensure_label_definition_exists(self, label: str) -> None:
         """Ensure label definition exists in repository with proper color/description"""
         from .label_colors import get_label_color, get_label_description
-        
+
         try:
             color = get_label_color(label)
             description = get_label_description(label)
@@ -233,21 +232,17 @@ class GitHubInterface:
     def create_or_update_label(self, name: str, color: str, description: str) -> bool:
         """Create or update a label with color and description"""
         import urllib.parse
-        
+
         # Check if label exists
         encoded_name = urllib.parse.quote(name, safe="")
         url = f"{self.base_url}/repos/{self.org}/{self.repo}/labels/{encoded_name}"
-        
-        label_data = {
-            "name": name,
-            "color": color,
-            "description": description
-        }
-        
+
+        label_data = {"name": name, "color": color, "description": description}
+
         with httpx.Client() as client:
             # Try to update first (if exists)
             response = client.patch(url, headers=self.headers, json=label_data)
-            
+
             if response.status_code == 200:
                 return False  # Updated existing
             elif response.status_code == 404:

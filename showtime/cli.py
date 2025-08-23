@@ -42,22 +42,19 @@ def _show_service_urls(pr_number: int, context: str = "deployment", sha: str = N
 
 def _determine_sync_action(pr, pr_state: str, target_sha: str) -> str:
     """Determine what action is needed based on PR state and labels"""
-    
+
     # 1. Closed PRs always need cleanup
-    if pr_state == 'closed':
+    if pr_state == "closed":
         return "cleanup"
-    
-    # 2. Check for explicit trigger labels  
-    trigger_labels = [
-        label for label in pr.labels
-        if "showtime-trigger-" in label
-    ]
-    
+
+    # 2. Check for explicit trigger labels
+    trigger_labels = [label for label in pr.labels if "showtime-trigger-" in label]
+
     # 3. Check for freeze label (PR-level) - only if no explicit triggers
     freeze_labels = [label for label in pr.labels if "showtime-freeze" in label]
     if freeze_labels and not trigger_labels:
         return "frozen_no_action"  # Frozen and no explicit triggers to override
-    
+
     if trigger_labels:
         # Explicit triggers take priority
         for trigger in trigger_labels:
@@ -66,14 +63,12 @@ def _determine_sync_action(pr, pr_state: str, target_sha: str) -> str:
                     if pr.current_show.needs_update(target_sha):
                         return "rolling_update"  # New commit with existing env
                     else:
-                        return "update_config"   # Same commit, maybe config change
+                        return "no_action"  # Same commit, no change needed
                 else:
                     return "create_environment"  # New environment
             elif "showtime-trigger-stop" in trigger:
                 return "destroy_environment"
-            elif "showtime-trigger-sync" in trigger:
-                return "rolling_update"
-    
+
     # 3. No explicit triggers - check for implicit sync needs
     if pr.current_show:
         if pr.current_show.needs_update(target_sha):
@@ -140,10 +135,10 @@ app = typer.Typer(
     help="""🎪 Apache Superset ephemeral environment management
 
 [bold]GitHub Label Workflow:[/bold]
-1. Add [green]🎪 trigger-start[/green] label to PR → Creates environment
+1. Add [green]🎪 ⚡ showtime-trigger-start[/green] label to PR → Creates environment
 2. Watch state labels: [blue]🎪 abc123f 🚦 building[/blue] → [green]🎪 abc123f 🚦 running[/green]
-3. Add [yellow]🎪 conf-enable-ALERTS[/yellow] → Enables feature flags
-4. Add [red]🎪 trigger-stop[/red] label → Destroys environment
+3. Add [orange]🎪 🧊 showtime-freeze[/orange] → Freezes environment from auto-sync
+4. Add [red]🎪 🛑 showtime-trigger-stop[/red] label → Destroys environment
 
 [bold]Reading State Labels:[/bold]
 • [green]🎪 abc123f 🚦 running[/green] - Environment status
@@ -169,8 +164,12 @@ def start(
         False, "--dry-run-aws", help="Skip AWS operations, use mock data"
     ),
     aws_sleep: int = typer.Option(0, "--aws-sleep", help="Seconds to sleep during AWS operations"),
-    image_tag: Optional[str] = typer.Option(None, "--image-tag", help="Override ECR image tag (e.g., pr-34764-ci)"),
-    force: bool = typer.Option(False, "--force", help="Force re-deployment by deleting existing service"),
+    image_tag: Optional[str] = typer.Option(
+        None, "--image-tag", help="Override ECR image tag (e.g., pr-34764-ci)"
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Force re-deployment by deleting existing service"
+    ),
 ):
     """Create ephemeral environment for PR"""
     try:
@@ -207,7 +206,9 @@ def start(
 
         # Create environment using trigger handler logic
         console.print(f"🎪 [bold blue]Creating environment for PR #{pr_number}...[/bold blue]")
-        _handle_start_trigger(pr_number, github, dry_run_aws, (dry_run or False), aws_sleep, image_tag, force)
+        _handle_start_trigger(
+            pr_number, github, dry_run_aws, (dry_run or False), aws_sleep, image_tag, force
+        )
 
     except GitHubError as e:
         console.print(f"🎪 [bold red]GitHub error:[/bold red] {e.message}")
@@ -258,9 +259,6 @@ def status(
 
         if show.requested_by:
             table.add_row("Requested by", f"@{show.requested_by}")
-
-        if show.config != "standard":
-            table.add_row("Configuration", show.config)
 
         if verbose:
             table.add_row("All Labels", ", ".join(pr.circus_labels))
@@ -486,34 +484,19 @@ def list(
 @app.command()
 def labels():
     """🎪 Show complete circus tent label reference"""
+    from .core.label_colors import LABEL_DEFINITIONS
 
     console.print("🎪 [bold blue]Circus Tent Label Reference[/bold blue]")
     console.print()
 
-    # Trigger Labels
-    console.print("[bold yellow]🎯 Trigger Labels (Add these to GitHub PR):[/bold yellow]")
+    # User Action Labels (from LABEL_DEFINITIONS)
+    console.print("[bold yellow]🎯 User Action Labels (Add these to GitHub PR):[/bold yellow]")
     trigger_table = Table()
     trigger_table.add_column("Label", style="green")
-    trigger_table.add_column("Action", style="white")
     trigger_table.add_column("Description", style="dim")
 
-    trigger_table.add_row(
-        "🎪 trigger-start", "Create environment", "Builds and deploys ephemeral environment"
-    )
-    trigger_table.add_row(
-        "🎪 trigger-stop", "Destroy environment", "Cleans up AWS resources and removes labels"
-    )
-    trigger_table.add_row(
-        "🎪 trigger-sync", "Update environment", "Updates to latest commit with zero downtime"
-    )
-    trigger_table.add_row(
-        "🎪 conf-enable-ALERTS", "Enable feature flag", "Enables SUPERSET_FEATURE_ALERTS=True"
-    )
-    trigger_table.add_row(
-        "🎪 conf-disable-DASHBOARD_RBAC",
-        "Disable feature flag",
-        "Disables SUPERSET_FEATURE_DASHBOARD_RBAC=False",
-    )
+    for label_name, definition in LABEL_DEFINITIONS.items():
+        trigger_table.add_row(f"`{label_name}`", definition["description"])
 
     console.print(trigger_table)
     console.print()
@@ -534,7 +517,6 @@ def labels():
     state_table.add_row("🎪 {sha} 🌐 {ip-with-dashes}", "Environment IP", "🎪 abc123f 🌐 52-1-2-3")
     state_table.add_row("🎪 {sha} ⌛ {ttl-policy}", "TTL policy", "🎪 abc123f ⌛ 24h")
     state_table.add_row("🎪 {sha} 🤡 {username}", "Requested by", "🎪 abc123f 🤡 maxime")
-    state_table.add_row("🎪 {sha} ⚙️ {config-list}", "Feature flags", "🎪 abc123f ⚙️ alerts,debug")
 
     console.print(state_table)
     console.print()
@@ -544,25 +526,23 @@ def labels():
     console.print()
 
     console.print("[bold]1. Create Environment:[/bold]")
-    console.print("   • Add label: [green]🎪 trigger-start[/green]")
+    console.print("   • Add label: [green]🎪 ⚡ showtime-trigger-start[/green]")
     console.print(
         "   • Watch for: [blue]🎪 abc123f 🚦 building[/blue] → [green]🎪 abc123f 🚦 running[/green]"
     )
-    console.print("   • Get URL from: [cyan]🎪 abc123f 🌐 52-1-2-3[/cyan] → http://52.1.2.3:8080")
-    console.print()
-
-    console.print("[bold]2. Enable Feature Flag:[/bold]")
-    console.print("   • Add label: [yellow]🎪 conf-enable-ALERTS[/yellow]")
     console.print(
-        "   • Watch for: [blue]🎪 abc123f 🚦 configuring[/blue] → [green]🎪 abc123f 🚦 running[/green]"
-    )
-    console.print(
-        "   • Config updates: [cyan]🎪 abc123f ⚙️ standard[/cyan] → [cyan]🎪 abc123f ⚙️ alerts[/cyan]"
+        "   • Get URL from: [cyan]🎪 abc123f 🌐 52.1.2.3:8080[/cyan] → http://52.1.2.3:8080"
     )
     console.print()
 
-    console.print("[bold]3. Update to New Commit:[/bold]")
-    console.print("   • Add label: [green]🎪 trigger-sync[/green]")
+    console.print("[bold]2. Freeze Environment (Optional):[/bold]")
+    console.print("   • Add label: [orange]🎪 🧊 showtime-freeze[/orange]")
+    console.print("   • Result: Environment won't auto-update on new commits")
+    console.print("   • Use case: Test specific SHA while continuing development")
+    console.print()
+
+    console.print("[bold]3. Update to New Commit (Automatic):[/bold]")
+    console.print("   • New commit pushed → Automatic blue-green rolling update")
     console.print(
         "   • Watch for: [blue]🎪 abc123f 🚦 updating[/blue] → [green]🎪 def456a 🚦 running[/green]"
     )
@@ -570,7 +550,7 @@ def labels():
     console.print()
 
     console.print("[bold]4. Clean Up:[/bold]")
-    console.print("   • Add label: [red]🎪 trigger-stop[/red]")
+    console.print("   • Add label: [red]🎪 🛑 showtime-trigger-stop[/red]")
     console.print("   • Result: All 🎪 labels removed, AWS resources deleted")
     console.print()
 
@@ -609,10 +589,8 @@ def test_lifecycle(
         _handle_start_trigger(pr_number, github, dry_run_aws, dry_run_github, aws_sleep)
 
         console.print()
-        console.print("🎪 [bold]Step 2: Simulate conf-enable-ALERTS[/bold]")
-        _handle_config_trigger(
-            pr_number, "🎪 conf-enable-ALERTS", github, dry_run_aws, dry_run_github
-        )
+        console.print("🎪 [bold]Step 2: Simulate config update[/bold]")
+        console.print("🎪 [dim]Config changes now done via code commits, not labels[/dim]")
 
         console.print()
         console.print("🎪 [bold]Step 3: Simulate trigger-sync (new commit)[/bold]")
@@ -653,11 +631,11 @@ def sync(
     try:
         github = GitHubInterface()
         pr = PullRequest.from_id(pr_number, github)
-        
+
         # Get PR metadata for state-based decisions
         pr_data = github.get_pr_data(pr_number)
-        pr_state = pr_data.get('state', 'open')  # open, closed
-        
+        pr_state = pr_data.get("state", "open")  # open, closed
+
         # Get SHA - use provided SHA or default to latest
         if sha:
             target_sha = sha
@@ -665,24 +643,26 @@ def sync(
         else:
             target_sha = github.get_latest_commit_sha(pr_number)
             console.print(f"🎪 Using latest SHA: {target_sha[:7]}")
-        
+
         # Determine what actions are needed
         action_needed = _determine_sync_action(pr, pr_state, target_sha)
-        
+
         if check_only:
             # Output structured results for GitHub Actions
             console.print(f"action_needed={action_needed}")
-            
+
             # Build needed for new environments and updates (SHA changes)
             build_needed = action_needed in ["create_environment", "rolling_update", "auto_sync"]
             console.print(f"build_needed={str(build_needed).lower()}")
-            
+
             # Deploy needed for everything except no_action
             deploy_needed = action_needed != "no_action"
             console.print(f"deploy_needed={str(deploy_needed).lower()}")
             return
-            
-        console.print(f"🎪 [bold blue]Syncing PR #{pr_number}[/bold blue] (state: {pr_state}, SHA: {latest_sha[:7]})")
+
+        console.print(
+            f"🎪 [bold blue]Syncing PR #{pr_number}[/bold blue] (state: {pr_state}, SHA: {target_sha[:7]})"
+        )
         console.print(f"🎪 Action needed: {action_needed}")
 
         # Execute the determined action
@@ -695,16 +675,12 @@ def sync(
             return
 
         # 2. Find explicit trigger labels
-        trigger_labels = [
-            label
-            for label in pr.labels
-            if "showtime-trigger-" in label
-        ]
-        
+        trigger_labels = [label for label in pr.labels if "showtime-trigger-" in label]
+
         # 3. Handle explicit triggers first
         if trigger_labels:
             console.print(f"🎪 Processing {len(trigger_labels)} explicit trigger(s)")
-            
+
             for trigger in trigger_labels:
                 console.print(f"🎪 Processing: {trigger}")
 
@@ -712,26 +688,28 @@ def sync(
                 if not dry_run_github:
                     github.remove_label(pr_number, trigger)
                 else:
-                    console.print(f"🎪 [bold yellow]DRY-RUN-GITHUB[/bold yellow] - Would remove: {trigger}")
+                    console.print(
+                        f"🎪 [bold yellow]DRY-RUN-GITHUB[/bold yellow] - Would remove: {trigger}"
+                    )
 
                 # Process the trigger
                 if "showtime-trigger-start" in trigger:
                     _handle_start_trigger(pr_number, github, dry_run_aws, dry_run_github, aws_sleep)
                 elif "showtime-trigger-stop" in trigger:
                     _handle_stop_trigger(pr_number, github, dry_run_aws, dry_run_github)
-                elif "showtime-trigger-sync" in trigger:
-                    _handle_sync_trigger(pr_number, github, dry_run_aws, dry_run_github, aws_sleep)
 
             console.print("🎪 All explicit triggers processed!")
             return
 
         # 4. No explicit triggers - check for implicit sync needs
         console.print("🎪 No explicit triggers found - checking for implicit sync needs")
-        
+
         if pr.current_show:
             # Environment exists - check if it needs updating
-            if pr.current_show.needs_update(latest_sha):
-                console.print(f"🎪 Environment outdated ({pr.current_show.sha} → {latest_sha[:7]}) - auto-syncing")
+            if pr.current_show.needs_update(target_sha):
+                console.print(
+                    f"🎪 Environment outdated ({pr.current_show.sha} → {target_sha[:7]}) - auto-syncing"
+                )
                 _handle_sync_trigger(pr_number, github, dry_run_aws, dry_run_github, aws_sleep)
             else:
                 console.print(f"🎪 Environment is up to date ({pr.current_show.sha})")
@@ -778,19 +756,19 @@ def setup_labels(
 ):
     """🎪 Set up GitHub label definitions with colors and descriptions"""
     try:
-        from .core.label_colors import LABEL_DEFINITIONS, get_label_color, get_label_description
-        
+        from .core.label_colors import LABEL_DEFINITIONS
+
         github = GitHubInterface()
-        
+
         console.print("🎪 [bold blue]Setting up circus tent label definitions...[/bold blue]")
-        
+
         created_count = 0
         updated_count = 0
-        
+
         for label_name, definition in LABEL_DEFINITIONS.items():
             color = definition["color"]
             description = definition["description"]
-            
+
             if dry_run:
                 console.print(f"🏷️ Would create: [bold]{label_name}[/bold]")
                 console.print(f"   Color: #{color}")
@@ -807,13 +785,15 @@ def setup_labels(
                         console.print(f"🔄 Updated: [bold]{label_name}[/bold]")
                 except Exception as e:
                     console.print(f"❌ Failed to create {label_name}: {e}")
-        
+
         if not dry_run:
-            console.print(f"\n🎪 [bold green]Label setup complete![/bold green]")
+            console.print("\n🎪 [bold green]Label setup complete![/bold green]")
             console.print(f"   📊 Created: {created_count}")
             console.print(f"   🔄 Updated: {updated_count}")
-            console.print("\n🎪 [dim]Note: Dynamic labels (with SHA) are created automatically during deployment[/dim]")
-        
+            console.print(
+                "\n🎪 [dim]Note: Dynamic labels (with SHA) are created automatically during deployment[/dim]"
+            )
+
     except Exception as e:
         console.print(f"🎪 [bold red]Error setting up labels:[/bold red] {e}")
 
@@ -916,25 +896,33 @@ def cleanup(
                     if respect_ttl:
                         # Use individual TTL labels
                         effective_ttl_days = get_effective_ttl(pr)
-                        
+
                         if effective_ttl_days is None:
                             # "never" label found - skip cleanup
-                            console.print(f"🎪 [blue]PR #{pr_number} marked as 'never expire' - skipping[/blue]")
+                            console.print(
+                                f"🎪 [blue]PR #{pr_number} marked as 'never expire' - skipping[/blue]"
+                            )
                             continue
-                        
+
                         # Apply max_age ceiling if specified
                         if max_age_days and effective_ttl_days > max_age_days:
-                            console.print(f"🎪 [yellow]PR #{pr_number} TTL ({effective_ttl_days}d) exceeds max-age ({max_age_days}d)[/yellow]")
+                            console.print(
+                                f"🎪 [yellow]PR #{pr_number} TTL ({effective_ttl_days}d) exceeds max-age ({max_age_days}d)[/yellow]"
+                            )
                             effective_ttl_days = max_age_days
-                        
+
                         cutoff_time = datetime.now() - timedelta(days=effective_ttl_days)
-                        console.print(f"🎪 PR #{pr_number} effective TTL: {effective_ttl_days} days")
-                        
+                        console.print(
+                            f"🎪 PR #{pr_number} effective TTL: {effective_ttl_days} days"
+                        )
+
                     else:
                         # Use global older_than parameter (current behavior)
                         time_match = re.match(r"(\d+)([hd])", older_than)
                         if not time_match:
-                            console.print(f"🎪 [bold red]Invalid time format:[/bold red] {older_than}")
+                            console.print(
+                                f"🎪 [bold red]Invalid time format:[/bold red] {older_than}"
+                            )
                             return
 
                         hours = int(time_match.group(1))
@@ -1068,7 +1056,6 @@ def _handle_start_trigger(
             created_at=datetime.utcnow().strftime("%Y-%m-%dT%H-%M"),
             ttl="24h",
             requested_by=github_actor,
-            config="standard",
         )
 
         console.print(f"🎪 Creating environment {show.aws_service_name}")
@@ -1134,7 +1121,7 @@ def _handle_start_trigger(
 **Credentials:** admin / admin
 **TTL:** {show.ttl} (auto-cleanup)
 
-**Feature flags:** Add `🎪 conf-enable-ALERTS` labels to configure
+**Configuration:** Modify feature flags in your PR code for new SHA
 **Updates:** Environment updates automatically on new commits
 
 *Powered by [Superset Showtime](https://github.com/mistercrunch/superset-showtime)*"""
@@ -1245,7 +1232,7 @@ def _handle_start_trigger(
 **TTL:** {show.ttl} (auto-cleanup)
 **Feature flags:** {len(feature_flags)} enabled
 
-**Feature flags:** Add `🎪 conf-enable-ALERTS` labels to configure
+**Configuration:** Modify feature flags in your PR code for new SHA
 **Updates:** Environment updates automatically on new commits
 
 *Powered by [Superset Showtime](https://github.com/mistercrunch/superset-showtime)*"""
@@ -1295,9 +1282,11 @@ def _extract_feature_flags_from_pr(pr_number: int, github: GitHubInterface) -> l
         results = []
 
         for match in re.finditer(pattern, description):
-            config = {"name": f"SUPERSET_FEATURE_{match.group(1)}", "value": match.group(2)}
-            results.append(config)
-            console.print(f"🎪 Found feature flag: {config['name']}={config['value']}")
+            feature_config = {"name": f"SUPERSET_FEATURE_{match.group(1)}", "value": match.group(2)}
+            results.append(feature_config)
+            console.print(
+                f"🎪 Found feature flag: {feature_config['name']}={feature_config['value']}"
+            )
 
         return results
 
@@ -1441,7 +1430,6 @@ def _handle_sync_trigger(
             created_at=datetime.utcnow().strftime("%Y-%m-%dT%H-%M"),
             ttl=pr.current_show.ttl,
             requested_by=pr.current_show.requested_by,
-            config=pr.current_show.config,
         )
 
         console.print(f"🎪 Building new environment: {new_show.aws_service_name}")
@@ -1460,9 +1448,6 @@ def _handle_sync_trigger(
             console.print(f"🎪 Traffic switched to {new_show.sha} at {new_show.ip}")
 
             # Post rolling update success comment
-            import os
-
-            github_actor = os.getenv("GITHUB_ACTOR", DEFAULT_GITHUB_ACTOR)
             update_comment = f"""🎪 Environment updated: {pr.current_show.sha} → `{new_show.sha}`
 
 **New Environment:** http://{new_show.ip}:8080
@@ -1482,7 +1467,6 @@ Your latest changes are now live.
 
     except Exception as e:
         console.print(f"🎪 [bold red]Sync trigger failed:[/bold red] {e}")
-
 
 
 def main():

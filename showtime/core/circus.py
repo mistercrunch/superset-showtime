@@ -23,7 +23,6 @@ class Show:
     created_at: Optional[str] = None  # ISO timestamp
     ttl: str = "24h"  # 24h, 48h, close, etc.
     requested_by: Optional[str] = None  # GitHub username
-    config: str = "standard"  # Configuration (alerts,debug)
 
     @property
     def aws_service_name(self) -> str:
@@ -72,9 +71,6 @@ class Show:
         if self.requested_by:
             labels.append(f"🎪 {self.sha} 🤡 {self.requested_by}")
 
-        if self.config != "standard":
-            labels.append(f"🎪 {self.sha} ⚙️ {self.config}")
-
         return labels
 
     @classmethod
@@ -112,8 +108,6 @@ class Show:
                     show_data["ttl"] = value
                 elif emoji == "🤡":  # User (clown!)
                     show_data["requested_by"] = value
-                elif emoji == "⚙️":  # Config
-                    show_data["config"] = value
 
         # Only return Show if we found relevant labels for this SHA
         if any(label.endswith(f" {sha}") for label in labels if "🎯" in label or "🏗️" in label):
@@ -220,60 +214,38 @@ class PullRequest:
         self._shows = self._parse_shows_from_labels()
 
 
-# Utility functions for configuration label handling
-def is_configuration_label(label: str) -> bool:
-    """Check if label is a configuration command"""
-    return label.startswith("🎪 conf-")
-
-
-def parse_configuration_command(label: str) -> Optional[str]:
-    """
-    Parse configuration command from label
-
-    Args:
-        label: Label like "🎪 conf-enable-ALERTS"
-
-    Returns:
-        Command string like "enable-ALERTS" or None if not a config label
-    """
-    if not is_configuration_label(label):
-        return None
-
-    return label.replace("🎪 conf-", "")
-
-
 def parse_ttl_days(ttl_str: str) -> Optional[float]:
     """Parse TTL string to days"""
     import re
-    
+
     if ttl_str == "never":
         return None  # Never expire
-    
+
     if ttl_str == "close":
         return None  # Special handling needed
-    
+
     # Parse number + unit: 24h, 7d, 2w, etc.
     match = re.match(r"(\d+(?:\.\d+)?)(h|d|w)", ttl_str.lower())
     if not match:
         return 2.0  # Default 2 days if invalid
-    
+
     value = float(match.group(1))
     unit = match.group(2)
-    
+
     if unit == "h":
         return value / 24.0  # Hours to days
     elif unit == "d":
         return value  # Already in days
     elif unit == "w":
         return value * 7.0  # Weeks to days
-    
+
     return 2.0  # Default
 
 
 def get_effective_ttl(pr) -> Optional[float]:
     """Get effective TTL in days for a PR (handles multiple labels, conflicts)"""
     ttl_labels = []
-    
+
     # Find all TTL labels for all shows
     for show in pr.shows:
         if show.ttl:
@@ -284,52 +256,9 @@ def get_effective_ttl(pr) -> Optional[float]:
                 # For "close", continue checking others
             else:
                 ttl_labels.append(ttl_days)
-    
+
     if not ttl_labels:
         return 2.0  # Default 2 days
-    
+
     # Use longest duration if multiple labels
     return max(ttl_labels)
-
-
-def merge_config(current_config: str, command: str) -> str:
-    """
-    Merge new configuration command into existing config
-
-    Args:
-        current_config: Current config string like "standard,alerts"
-        command: New command like "enable-DASHBOARD_RBAC" or "disable-ALERTS"
-
-    Returns:
-        Updated config string
-    """
-    configs = current_config.split(",") if current_config != "standard" else []
-
-    # Handle feature flag commands
-    if command.startswith("enable-"):
-        feature = command.replace("enable-", "").lower()
-        configs = [c for c in configs if not c.startswith(f"no-{feature}")]
-        configs.append(feature)
-
-    elif command.startswith("disable-"):
-        feature = command.replace("disable-", "").lower()
-        configs = [c for c in configs if c != feature]
-        configs.append(f"no-{feature}")
-
-    # Handle debug toggle commands
-    elif command == "debug-on":
-        configs = [c for c in configs if c != "debug"]
-        configs.append("debug")
-
-    elif command == "debug-off":
-        configs = [c for c in configs if c != "debug"]
-
-    # Handle size commands
-    elif command.startswith("size-"):
-        size = command  # Keep full size command
-        configs = [c for c in configs if not c.startswith("size-")]
-        configs.append(size)
-
-    # Return cleaned config
-    unique_configs = list(dict.fromkeys(configs))  # Remove duplicates, preserve order
-    return ",".join(unique_configs) if unique_configs else "standard"

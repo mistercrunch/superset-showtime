@@ -84,7 +84,7 @@ class AWSInterface:
         )
 
         service_name = f"{show.aws_service_name}-service"  # pr-{pr_number}-{sha}-service
-        
+
         try:
             # Handle force flag - delete existing service for this SHA first
             if force:
@@ -93,16 +93,16 @@ class AWSInterface:
                     print(f"🗑️ Deleting existing service: {service_name}")
                     success = self._delete_ecs_service(service_name)
                     if success:
-                        print(f"✅ Service deletion initiated, waiting for completion...")
+                        print("✅ Service deletion initiated, waiting for completion...")
                         # Wait for service to be fully deleted before proceeding
                         if self._wait_for_service_deletion(service_name):
-                            print(f"✅ Service deletion completed, proceeding with fresh deployment")
+                            print("✅ Service deletion completed, proceeding with fresh deployment")
                         else:
-                            print(f"⚠️ Service deletion timeout, proceeding anyway")
+                            print("⚠️ Service deletion timeout, proceeding anyway")
                     else:
-                        print(f"⚠️ Failed to delete existing service, proceeding anyway")
+                        print("⚠️ Failed to delete existing service, proceeding anyway")
                 else:
-                    print(f"ℹ️ No existing service found, proceeding with new deployment")
+                    print("ℹ️ No existing service found, proceeding with new deployment")
             # Step 1: Determine which Docker image to use (DockerHub direct)
             if image_tag_override:
                 # Use explicit override (can be any format)
@@ -113,8 +113,10 @@ class AWSInterface:
                 supersetbot_tag = f"{sha[:7]}-ci"  # Matches supersetbot format: abc123f-ci
                 docker_image = f"apache/superset:{supersetbot_tag}"
                 print(f"✅ Using DockerHub image: {docker_image} (supersetbot SHA format)")
-                print(f"💡 To test with different image: --image-tag latest or --image-tag abc123f-ci")
-            
+                print(
+                    "💡 To test with different image: --image-tag latest or --image-tag abc123f-ci"
+                )
+
             # Note: No ECR image check needed - ECS will pull from DockerHub directly
 
             # Step 2: Create/update ECS task definition with feature flags
@@ -200,7 +202,9 @@ class AWSInterface:
             return True
 
         except Exception as e:
-            raise AWSError(message=str(e), operation="delete_environment", resource=service_name)
+            raise AWSError(
+                message=str(e), operation="delete_environment", resource=service_name
+            ) from e
 
     def get_environment_ip(self, service_name: str) -> Optional[str]:
         """
@@ -373,7 +377,7 @@ class AWSInterface:
         """Create ECS service (replicate exact GHA create-service step)"""
         try:
             # Replicate exact GHA create-service command parameters
-            response = self.ecs_client.create_service(
+            self.ecs_client.create_service(
                 cluster=self.cluster,
                 serviceName=service_name,  # pr-{pr_number}-service
                 taskDefinition=self.cluster,  # Uses cluster name as task def family
@@ -489,7 +493,7 @@ class AWSInterface:
             return orphaned
 
         except Exception as e:
-            raise AWSError(message=str(e), operation="cleanup_orphaned_environments")
+            raise AWSError(message=str(e), operation="cleanup_orphaned_environments") from e
 
     def update_feature_flags(self, service_name: str, feature_flags: Dict[str, bool]) -> bool:
         """Update feature flags in running environment"""
@@ -602,7 +606,7 @@ class AWSInterface:
             if time_match.group(2) == "d":
                 hours *= 24
 
-            cutoff_timestamp = time.time() - (hours * 3600)
+            # cutoff_timestamp = time.time() - (hours * 3600)  # Not used in current implementation
             expired_services = []
 
             # List all services in cluster
@@ -780,24 +784,24 @@ class AWSInterface:
     def _wait_for_service_deletion(self, service_name: str, timeout_minutes: int = 5) -> bool:
         """Wait for ECS service to be fully deleted"""
         import time
-        
+
         try:
             max_attempts = timeout_minutes * 12  # 5s intervals
-            
+
             for attempt in range(max_attempts):
                 # Check if service still exists
                 if not self._service_exists(service_name):
                     print(f"✅ Service {service_name} fully deleted after {attempt * 5}s")
                     return True
-                
+
                 if attempt % 6 == 0:  # Every 30s
                     print(f"⏳ Waiting for service deletion... ({attempt * 5}s elapsed)")
-                
+
                 time.sleep(5)  # Check every 5 seconds
-            
+
             print(f"⚠️ Service deletion timeout after {timeout_minutes} minutes")
             return False
-            
+
         except Exception as e:
             print(f"❌ Error waiting for service deletion: {e}")
             return False

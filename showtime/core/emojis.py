@@ -18,7 +18,6 @@ EMOJI_MEANINGS = {
     "🌐": "ip",  # Globe for IP address
     "⌛": "ttl",  # Hourglass for time-to-live
     "🤡": "requested_by",  # Clown for who requested (circus theme!)
-    "⚙️": "config",  # Gear for configuration
 }
 
 # Reverse mapping for creating labels
@@ -30,12 +29,8 @@ STATUS_DISPLAY = {
     "running": "🟢",
     "updating": "🔄",
     "failed": "❌",
-    "configuring": "⚙️",
     "stopping": "🛑",
 }
-
-# Configuration command prefixes
-CONFIG_PREFIX = f"{CIRCUS_PREFIX} conf-"
 
 
 def create_circus_label(emoji_key: str, value: str) -> str:
@@ -79,8 +74,3 @@ def parse_circus_label(label: str) -> tuple[str, str]:
 def is_circus_label(label: str) -> bool:
     """Check if label is a circus tent label"""
     return label.startswith(f"{CIRCUS_PREFIX} ")
-
-
-def is_configuration_command(label: str) -> bool:
-    """Check if label is a configuration command"""
-    return label.startswith(CONFIG_PREFIX)

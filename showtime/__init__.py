@@ -9,13 +9,11 @@ __author__ = "Maxime Beauchemin"
 __email__ = "maximebeauchemin@gmail.com"
 
 from .core.circus import PullRequest, Show
-from .core.config import ShowtimeConfig
 from .core.github import GitHubInterface
 
 __all__ = [
     "__version__",
     "Show",
     "PullRequest",
-    "ShowtimeConfig",
     "GitHubInterface",
 ]

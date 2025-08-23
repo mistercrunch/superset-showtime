@@ -4,7 +4,7 @@ name: 🎪 Superset Showtime
 on:
   pull_request_target:
     types: [labeled, unlabeled, synchronize, closed]
-  
+
   # Manual testing
   workflow_dispatch:
     inputs:
@@ -33,7 +33,7 @@ jobs:
   sync:
     name: 🎪 Sync PR to desired state
     runs-on: ubuntu-latest
-    
+
     permissions:
       contents: read
       pull-requests: write
@@ -48,12 +48,12 @@ jobs:
           PR_NUM=${{ github.event.pull_request.number || github.event.inputs.pr_number }}
           OUTPUT=$(python -m showtime sync $PR_NUM --check-only)
           echo "$OUTPUT"
-          
+
           # Extract outputs for conditional steps
           ACTION=$(echo "$OUTPUT" | grep "action_needed=" | cut -d'=' -f2)
           BUILD=$(echo "$OUTPUT" | grep "build_needed=" | cut -d'=' -f2)
           DEPLOY=$(echo "$OUTPUT" | grep "deploy_needed=" | cut -d'=' -f2)
-          
+
           echo "action_needed=$ACTION" >> $GITHUB_OUTPUT
           echo "build_needed=$BUILD" >> $GITHUB_OUTPUT
           echo "deploy_needed=$DEPLOY" >> $GITHUB_OUTPUT
@@ -66,7 +66,7 @@ jobs:
           dockerhub-token: ${{ env.DOCKERHUB_TOKEN }}
           build: "true"
 
-      - name: Setup supersetbot  
+      - name: Setup supersetbot
         if: steps.check.outputs.build_needed == 'true'
         uses: ./.github/actions/setup-supersetbot/
 
@@ -76,7 +76,7 @@ jobs:
         with:
           script: |
             let sha;
-            
+
             // Check for SHA override from workflow_dispatch
             if ("${{ github.event.inputs.sha }}") {
               sha = "${{ github.event.inputs.sha }}";
@@ -92,11 +92,11 @@ jobs:
               sha = pr.head.sha;
               console.log(`Using latest SHA: ${sha}`);
             }
-            
+
             core.exportVariable("PR_SHA", sha);
 
       - name: Checkout PR code
-        if: steps.check.outputs.build_needed == 'true' 
+        if: steps.check.outputs.build_needed == 'true'
         uses: actions/checkout@v4
         with:
           ref: ${{ env.PR_SHA }}
