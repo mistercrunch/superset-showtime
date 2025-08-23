@@ -89,11 +89,10 @@ showtime test-lifecycle 1234           # Full workflow simulation
 
 | Label | Action | Result |
 |-------|---------|---------|
-| `🎪 trigger-start` | Create environment | Builds and deploys ephemeral environment |
-| `🎪 trigger-stop` | Destroy environment | Cleans up AWS resources and removes all labels |
-| `🎪 trigger-sync` | Update to latest commit | Zero-downtime rolling update |
-| `🎪 conf-enable-ALERTS` | Enable feature flag | Sets `SUPERSET_FEATURE_ALERTS=True` |
-| `🎪 conf-disable-DASHBOARD_RBAC` | Disable feature flag | Sets `SUPERSET_FEATURE_DASHBOARD_RBAC=False` |
+| `🎪 ⚡ showtime-trigger-start` | Create environment | Builds and deploys ephemeral environment with blue-green deployment |
+| `🎪 🛑 showtime-trigger-stop` | Destroy environment | Cleans up AWS resources and removes all labels |
+| `🎪 🔄 showtime-trigger-sync` | Update to latest commit | Zero-downtime rolling update |
+| `🎪 🧊 showtime-freeze` | Freeze environment | Prevents auto-sync on new commits (for testing specific SHAs) |
 
 ### 📊 State Labels (Automatically Managed)
 
@@ -103,16 +102,33 @@ showtime test-lifecycle 1234           # Full workflow simulation
 | `🎪 🎯 {sha}` | Active environment pointer | `🎪 🎯 abc123f` |
 | `🎪 🏗️ {sha}` | Building environment pointer | `🎪 🏗️ def456a` |
 | `🎪 {sha} 📅 {timestamp}` | Creation time | `🎪 abc123f 📅 2024-01-15T14-30` |
-| `🎪 {sha} 🌐 {ip-with-dashes}` | Environment IP | `🎪 abc123f 🌐 52-1-2-3` |
+| `🎪 {sha} 🌐 {ip:port}` | Environment URL | `🎪 abc123f 🌐 52.1.2.3:8080` |
 | `🎪 {sha} ⌛ {ttl}` | Time-to-live policy | `🎪 abc123f ⌛ 24h` |
 | `🎪 {sha} 🤡 {username}` | Who requested | `🎪 abc123f 🤡 maxime` |
-| `🎪 {sha} ⚙️ {config}` | Feature flags enabled | `🎪 abc123f ⚙️ alerts,debug` |
+
+## 🔧 Altering Feature Flags or Configuration
+
+**Recommendation**: Modify feature flags directly in your PR code instead of using labels.
+
+**Why this approach is better**:
+✅ **Creates new SHA**: Testable, traceable, reviewable  
+✅ **Infinitely extensible**: Any configuration change possible  
+✅ **Code-based**: Changes are explicit and permanent  
+✅ **Git history**: Configuration changes are tracked  
+
+**Example workflow**:
+1. Modify `superset_config.py` with feature flag changes
+2. Push commit → Creates new SHA (e.g., `def456a`)  
+3. Add `🎪 ⚡ showtime-trigger-start` → Deploys with new config
+4. Test environment reflects your exact code changes
+
+This keeps complexity in code where it belongs, not in label management!
 
 ## 🔄 Complete Workflows
 
 ### Creating Your First Environment
 
-1. **Add trigger label** in GitHub UI: `🎪 trigger-start`
+1. **Add trigger label** in GitHub UI: `🎪 ⚡ showtime-trigger-start`
 2. **Watch state labels appear:**
    ```
    🎪 abc123f 🚦 building      ← Environment is building
@@ -125,14 +141,12 @@ showtime test-lifecycle 1234           # Full workflow simulation
    🎪 abc123f 🌐 52-1-2-3      ← Visit http://52.1.2.3:8080
    ```
 
-### Enabling Feature Flags
+### Testing Specific Commits
 
-1. **Add config label:** `🎪 conf-enable-ALERTS`
-2. **Watch config update:**
-   ```
-   🎪 abc123f ⚙️ standard     ← Before
-   🎪 abc123f ⚙️ alerts       ← After (feature enabled!)
-   ```
+1. **Add freeze label:** `🎪 🧊 showtime-freeze`
+2. **Result:** Environment won't auto-update on new commits
+3. **Use case:** Test specific SHA while continuing development
+4. **Override:** Add `🎪 ⚡ showtime-trigger-start` to force update despite freeze
 
 ### Rolling Updates (Automatic!)
 
@@ -228,11 +242,14 @@ Remove or disable the current `ephemeral-env.yml` and `ephemeral-env-pr-close.ym
 
 ### Core Commands
 ```bash
-showtime start 1234             # Create environment (with dry-run options)
-showtime stop 1234              # Delete environment
-showtime status 1234            # Show environment status
-showtime list                   # List all environments across org
-showtime labels                 # Complete label reference guide
+showtime start 1234                    # Create environment (latest SHA)
+showtime start 1234 --sha abc123f     # Create environment (specific SHA)
+showtime start 1234 --force           # Force re-deployment
+showtime stop 1234                    # Delete environment
+showtime status 1234                  # Show environment status
+showtime list                         # List all environments with clickable links
+showtime sync 1234                    # Intelligent sync to desired state
+showtime cleanup --respect-ttl        # Clean up based on individual TTL labels
 ```
 
 ### Testing & Development

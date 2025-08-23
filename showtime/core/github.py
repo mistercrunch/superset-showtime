@@ -72,12 +72,29 @@ class GitHubInterface:
             return [label["name"] for label in labels_data]
 
     def add_label(self, pr_number: int, label: str) -> None:
-        """Add a label to a PR"""
+        """Add a label to a PR (automatically creates label definition if needed)"""
+        from .label_colors import get_label_color, get_label_description
+        
+        # Ensure label definition exists with proper color/description
+        self._ensure_label_definition_exists(label)
+        
         url = f"{self.base_url}/repos/{self.org}/{self.repo}/issues/{pr_number}/labels"
 
         with httpx.Client() as client:
             response = client.post(url, headers=self.headers, json={"labels": [label]})
             response.raise_for_status()
+
+    def _ensure_label_definition_exists(self, label: str) -> None:
+        """Ensure label definition exists in repository with proper color/description"""
+        from .label_colors import get_label_color, get_label_description
+        
+        try:
+            color = get_label_color(label)
+            description = get_label_description(label)
+            self.create_or_update_label(label, color, description)
+        except Exception:
+            # If label creation fails, continue anyway - label might already exist
+            pass
 
     def remove_label(self, pr_number: int, label: str) -> None:
         """Remove a label from a PR"""
@@ -131,7 +148,10 @@ class GitHubInterface:
         # Search for issues with circus tent labels (updated for SHA-first format)
         url = f"{self.base_url}/search/issues"
         # Search for PRs with any circus tent labels
-        params = {"q": f"repo:{self.org}/{self.repo} is:pr 🎪", "per_page": 100}  # Include closed PRs
+        params = {
+            "q": f"repo:{self.org}/{self.repo} is:pr 🎪",
+            "per_page": 100,
+        }  # Include closed PRs
 
         with httpx.Client() as client:
             response = client.get(url, headers=self.headers, params=params)
@@ -209,3 +229,33 @@ class GitHubInterface:
             return deleted_labels
 
         return sha_labels
+
+    def create_or_update_label(self, name: str, color: str, description: str) -> bool:
+        """Create or update a label with color and description"""
+        import urllib.parse
+        
+        # Check if label exists
+        encoded_name = urllib.parse.quote(name, safe="")
+        url = f"{self.base_url}/repos/{self.org}/{self.repo}/labels/{encoded_name}"
+        
+        label_data = {
+            "name": name,
+            "color": color,
+            "description": description
+        }
+        
+        with httpx.Client() as client:
+            # Try to update first (if exists)
+            response = client.patch(url, headers=self.headers, json=label_data)
+            
+            if response.status_code == 200:
+                return False  # Updated existing
+            elif response.status_code == 404:
+                # Label doesn't exist, create it
+                create_url = f"{self.base_url}/repos/{self.org}/{self.repo}/labels"
+                response = client.post(create_url, headers=self.headers, json=label_data)
+                response.raise_for_status()
+                return True  # Created new
+            else:
+                response.raise_for_status()
+                return False

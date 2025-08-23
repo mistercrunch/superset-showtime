@@ -56,6 +56,8 @@ class AWSInterface:
         sha: str,
         github_user: str = "unknown",
         feature_flags: List[Dict[str, str]] = None,
+        image_tag_override: Optional[str] = None,
+        force: bool = False,
     ) -> EnvironmentResult:
         """
         Create ephemeral environment with blue-green deployment support
@@ -82,19 +84,42 @@ class AWSInterface:
         )
 
         service_name = f"{show.aws_service_name}-service"  # pr-{pr_number}-{sha}-service
-        image_tag = show.aws_image_tag  # pr-{pr_number}-{sha}-ci
-
+        
         try:
-            # Step 1: Check if ECR image exists (replicate GHA check-image step)
-            if not self._check_ecr_image_exists(image_tag):
-                return EnvironmentResult(
-                    success=False,
-                    error=f"Container image {image_tag} not found in ECR. Build the image first.",
-                )
+            # Handle force flag - delete existing service for this SHA first
+            if force:
+                print(f"🗑️ Force flag: Checking for existing service {service_name}")
+                if self._service_exists(service_name):
+                    print(f"🗑️ Deleting existing service: {service_name}")
+                    success = self._delete_ecs_service(service_name)
+                    if success:
+                        print(f"✅ Service deletion initiated, waiting for completion...")
+                        # Wait for service to be fully deleted before proceeding
+                        if self._wait_for_service_deletion(service_name):
+                            print(f"✅ Service deletion completed, proceeding with fresh deployment")
+                        else:
+                            print(f"⚠️ Service deletion timeout, proceeding anyway")
+                    else:
+                        print(f"⚠️ Failed to delete existing service, proceeding anyway")
+                else:
+                    print(f"ℹ️ No existing service found, proceeding with new deployment")
+            # Step 1: Determine which Docker image to use (DockerHub direct)
+            if image_tag_override:
+                # Use explicit override (can be any format)
+                docker_image = f"apache/superset:{image_tag_override}"
+                print(f"✅ Using override image: {docker_image}")
+            else:
+                # Use supersetbot SHA-based format (what supersetbot creates)
+                supersetbot_tag = f"{sha[:7]}-ci"  # Matches supersetbot format: abc123f-ci
+                docker_image = f"apache/superset:{supersetbot_tag}"
+                print(f"✅ Using DockerHub image: {docker_image} (supersetbot SHA format)")
+                print(f"💡 To test with different image: --image-tag latest or --image-tag abc123f-ci")
+            
+            # Note: No ECR image check needed - ECS will pull from DockerHub directly
 
             # Step 2: Create/update ECS task definition with feature flags
             task_def_arn = self._create_task_definition_with_image_and_flags(
-                image_tag, feature_flags or []
+                docker_image, feature_flags or []
             )
             if not task_def_arn:
                 return EnvironmentResult(success=False, error="Failed to create task definition")
@@ -128,9 +153,9 @@ class AWSInterface:
             if not self._wait_for_service_stability(service_name):
                 return EnvironmentResult(success=False, error="Service failed to become stable")
 
-            # Step 7: Health check the new service
+            # Step 7: Health check the new service (longer timeout for Superset + examples)
             print(f"🏥 Health checking service {service_name}...")
-            if not self._health_check_service(service_name):
+            if not self._health_check_service(service_name, max_attempts=20):  # 10 minutes total
                 return EnvironmentResult(success=False, error="Service failed health checks")
 
             # Step 8: Get IP after health checks pass
@@ -284,23 +309,18 @@ class AWSInterface:
             return False
 
     def _create_task_definition_with_image_and_flags(
-        self, image_tag: str, feature_flags: List[Dict[str, str]]
+        self, docker_image: str, feature_flags: List[Dict[str, str]]
     ) -> Optional[str]:
-        """Create ECS task definition with image and feature flags (replicate GHA task-def + env vars)"""
+        """Create ECS task definition with DockerHub image and feature flags"""
         try:
             # Load base task definition template
             task_def_path = Path(__file__).parent.parent / "data" / "ecs-task-definition.json"
             with open(task_def_path) as f:
                 task_def = json.load(f)
 
-            # Get ECR registry for full image URL
-            ecr_response = self.ecr_client.get_authorization_token()
-            registry_url = ecr_response["authorizationData"][0]["proxyEndpoint"]
-            registry_url = registry_url.replace("https://", "")
-            full_image_url = f"{registry_url}/{self.repository}:{image_tag}"
-
-            # Update image in container definition (replicate GHA render-task-definition)
-            task_def["containerDefinitions"][0]["image"] = full_image_url
+            # Use DockerHub image directly (no ECR needed)
+            # docker_image is already in format: apache/superset:abc123f-ci
+            task_def["containerDefinitions"][0]["image"] = docker_image
 
             # Add feature flags to environment (replicate GHA jq environment update)
             container_env = task_def["containerDefinitions"][0]["environment"]
@@ -755,4 +775,29 @@ class AWSInterface:
 
         except Exception as e:
             print(f"❌ Health check error: {e}")
+            return False
+
+    def _wait_for_service_deletion(self, service_name: str, timeout_minutes: int = 5) -> bool:
+        """Wait for ECS service to be fully deleted"""
+        import time
+        
+        try:
+            max_attempts = timeout_minutes * 12  # 5s intervals
+            
+            for attempt in range(max_attempts):
+                # Check if service still exists
+                if not self._service_exists(service_name):
+                    print(f"✅ Service {service_name} fully deleted after {attempt * 5}s")
+                    return True
+                
+                if attempt % 6 == 0:  # Every 30s
+                    print(f"⏳ Waiting for service deletion... ({attempt * 5}s elapsed)")
+                
+                time.sleep(5)  # Check every 5 seconds
+            
+            print(f"⚠️ Service deletion timeout after {timeout_minutes} minutes")
+            return False
+            
+        except Exception as e:
+            print(f"❌ Error waiting for service deletion: {e}")
             return False

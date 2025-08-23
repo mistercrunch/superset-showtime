@@ -242,6 +242,56 @@ def parse_configuration_command(label: str) -> Optional[str]:
     return label.replace("🎪 conf-", "")
 
 
+def parse_ttl_days(ttl_str: str) -> Optional[float]:
+    """Parse TTL string to days"""
+    import re
+    
+    if ttl_str == "never":
+        return None  # Never expire
+    
+    if ttl_str == "close":
+        return None  # Special handling needed
+    
+    # Parse number + unit: 24h, 7d, 2w, etc.
+    match = re.match(r"(\d+(?:\.\d+)?)(h|d|w)", ttl_str.lower())
+    if not match:
+        return 2.0  # Default 2 days if invalid
+    
+    value = float(match.group(1))
+    unit = match.group(2)
+    
+    if unit == "h":
+        return value / 24.0  # Hours to days
+    elif unit == "d":
+        return value  # Already in days
+    elif unit == "w":
+        return value * 7.0  # Weeks to days
+    
+    return 2.0  # Default
+
+
+def get_effective_ttl(pr) -> Optional[float]:
+    """Get effective TTL in days for a PR (handles multiple labels, conflicts)"""
+    ttl_labels = []
+    
+    # Find all TTL labels for all shows
+    for show in pr.shows:
+        if show.ttl:
+            ttl_days = parse_ttl_days(show.ttl)
+            if ttl_days is None:  # "never" or "close"
+                if show.ttl == "never":
+                    return None  # Never expire takes precedence
+                # For "close", continue checking others
+            else:
+                ttl_labels.append(ttl_days)
+    
+    if not ttl_labels:
+        return 2.0  # Default 2 days
+    
+    # Use longest duration if multiple labels
+    return max(ttl_labels)
+
+
 def merge_config(current_config: str, command: str) -> str:
     """
     Merge new configuration command into existing config
@@ -265,15 +315,15 @@ def merge_config(current_config: str, command: str) -> str:
         feature = command.replace("disable-", "").lower()
         configs = [c for c in configs if c != feature]
         configs.append(f"no-{feature}")
-        
+
     # Handle debug toggle commands
     elif command == "debug-on":
         configs = [c for c in configs if c != "debug"]
         configs.append("debug")
-        
+
     elif command == "debug-off":
         configs = [c for c in configs if c != "debug"]
-        
+
     # Handle size commands
     elif command.startswith("size-"):
         size = command  # Keep full size command

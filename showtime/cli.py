@@ -40,6 +40,50 @@ def _show_service_urls(pr_number: int, context: str = "deployment", sha: str = N
     console.print("")
 
 
+def _determine_sync_action(pr, pr_state: str, target_sha: str) -> str:
+    """Determine what action is needed based on PR state and labels"""
+    
+    # 1. Closed PRs always need cleanup
+    if pr_state == 'closed':
+        return "cleanup"
+    
+    # 2. Check for explicit trigger labels  
+    trigger_labels = [
+        label for label in pr.labels
+        if "showtime-trigger-" in label
+    ]
+    
+    # 3. Check for freeze label (PR-level) - only if no explicit triggers
+    freeze_labels = [label for label in pr.labels if "showtime-freeze" in label]
+    if freeze_labels and not trigger_labels:
+        return "frozen_no_action"  # Frozen and no explicit triggers to override
+    
+    if trigger_labels:
+        # Explicit triggers take priority
+        for trigger in trigger_labels:
+            if "showtime-trigger-start" in trigger:
+                if pr.current_show:
+                    if pr.current_show.needs_update(target_sha):
+                        return "rolling_update"  # New commit with existing env
+                    else:
+                        return "update_config"   # Same commit, maybe config change
+                else:
+                    return "create_environment"  # New environment
+            elif "showtime-trigger-stop" in trigger:
+                return "destroy_environment"
+            elif "showtime-trigger-sync" in trigger:
+                return "rolling_update"
+    
+    # 3. No explicit triggers - check for implicit sync needs
+    if pr.current_show:
+        if pr.current_show.needs_update(target_sha):
+            return "auto_sync"  # Auto-update on new commits
+        else:
+            return "no_action"  # Everything in sync
+    else:
+        return "no_action"  # No environment, no triggers
+
+
 def _schedule_blue_cleanup(pr_number: int, blue_services: list):
     """Schedule cleanup of blue services after successful green deployment"""
     import threading
@@ -117,7 +161,7 @@ console = Console()
 @app.command()
 def start(
     pr_number: int = typer.Argument(..., help="PR number to create environment for"),
-    sha: Optional[str] = typer.Option(None, help="Specific commit SHA (default: latest)"),
+    sha: Optional[str] = typer.Option(None, "--sha", help="Specific commit SHA (default: latest)"),
     ttl: Optional[str] = typer.Option("24h", help="Time to live (24h, 48h, 1w, close)"),
     size: Optional[str] = typer.Option("standard", help="Environment size (standard, large)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
@@ -125,14 +169,19 @@ def start(
         False, "--dry-run-aws", help="Skip AWS operations, use mock data"
     ),
     aws_sleep: int = typer.Option(0, "--aws-sleep", help="Seconds to sleep during AWS operations"),
+    image_tag: Optional[str] = typer.Option(None, "--image-tag", help="Override ECR image tag (e.g., pr-34764-ci)"),
+    force: bool = typer.Option(False, "--force", help="Force re-deployment by deleting existing service"),
 ):
     """Create ephemeral environment for PR"""
     try:
         github = GitHubInterface()
 
-        # Get latest SHA if not provided
+        # Get SHA - use provided SHA or default to latest
         if not sha:
             sha = github.get_latest_commit_sha(pr_number)
+            console.print(f"🎪 Using latest SHA: {sha[:7]}")
+        else:
+            console.print(f"🎪 Using specified SHA: {sha[:7]}")
 
         if dry_run:
             console.print("🎪 [bold yellow]DRY RUN[/bold yellow] - Would create environment:")
@@ -158,7 +207,7 @@ def start(
 
         # Create environment using trigger handler logic
         console.print(f"🎪 [bold blue]Creating environment for PR #{pr_number}...[/bold blue]")
-        _handle_start_trigger(pr_number, github, dry_run_aws, (dry_run or False), aws_sleep)
+        _handle_start_trigger(pr_number, github, dry_run_aws, (dry_run or False), aws_sleep, image_tag, force)
 
     except GitHubError as e:
         console.print(f"🎪 [bold red]GitHub error:[/bold red] {e.message}")
@@ -581,8 +630,15 @@ def test_lifecycle(
 
 
 @app.command()
-def handle_trigger(
+def sync(
     pr_number: int,
+    sha: Optional[str] = typer.Option(None, "--sha", help="Specific commit SHA (default: latest)"),
+    check_only: bool = typer.Option(
+        False, "--check-only", help="Check what actions are needed without executing"
+    ),
+    deploy: bool = typer.Option(
+        False, "--deploy", help="Execute deployment actions (assumes build is complete)"
+    ),
     dry_run_aws: bool = typer.Option(
         False, "--dry-run-aws", help="Skip AWS operations, use mock data"
     ),
@@ -593,46 +649,95 @@ def handle_trigger(
         0, "--aws-sleep", help="Seconds to sleep during AWS operations (for testing)"
     ),
 ):
-    """🎪 Process trigger labels (called by GitHub Actions)"""
+    """🎪 Intelligently sync PR to desired state (called by GitHub Actions)"""
     try:
         github = GitHubInterface()
         pr = PullRequest.from_id(pr_number, github)
+        
+        # Get PR metadata for state-based decisions
+        pr_data = github.get_pr_data(pr_number)
+        pr_state = pr_data.get('state', 'open')  # open, closed
+        
+        # Get SHA - use provided SHA or default to latest
+        if sha:
+            target_sha = sha
+            console.print(f"🎪 Using specified SHA: {target_sha[:7]}")
+        else:
+            target_sha = github.get_latest_commit_sha(pr_number)
+            console.print(f"🎪 Using latest SHA: {target_sha[:7]}")
+        
+        # Determine what actions are needed
+        action_needed = _determine_sync_action(pr, pr_state, target_sha)
+        
+        if check_only:
+            # Output structured results for GitHub Actions
+            console.print(f"action_needed={action_needed}")
+            
+            # Build needed for new environments and updates (SHA changes)
+            build_needed = action_needed in ["create_environment", "rolling_update", "auto_sync"]
+            console.print(f"build_needed={str(build_needed).lower()}")
+            
+            # Deploy needed for everything except no_action
+            deploy_needed = action_needed != "no_action"
+            console.print(f"deploy_needed={str(deploy_needed).lower()}")
+            return
+            
+        console.print(f"🎪 [bold blue]Syncing PR #{pr_number}[/bold blue] (state: {pr_state}, SHA: {latest_sha[:7]})")
+        console.print(f"🎪 Action needed: {action_needed}")
 
-        # Find trigger labels
+        # Execute the determined action
+        if action_needed == "cleanup":
+            console.print("🎪 PR is closed - cleaning up environment")
+            if pr.current_show:
+                _handle_stop_trigger(pr_number, github, dry_run_aws, dry_run_github)
+            else:
+                console.print("🎪 No environment to clean up")
+            return
+
+        # 2. Find explicit trigger labels
         trigger_labels = [
             label
             for label in pr.labels
-            if label.startswith("🎪 trigger-") or label.startswith("🎪 conf-")
+            if "showtime-trigger-" in label
         ]
+        
+        # 3. Handle explicit triggers first
+        if trigger_labels:
+            console.print(f"🎪 Processing {len(trigger_labels)} explicit trigger(s)")
+            
+            for trigger in trigger_labels:
+                console.print(f"🎪 Processing: {trigger}")
 
-        if not trigger_labels:
-            console.print(f"🎪 No trigger labels found for PR #{pr_number}")
+                # Remove trigger label immediately (atomic operation)
+                if not dry_run_github:
+                    github.remove_label(pr_number, trigger)
+                else:
+                    console.print(f"🎪 [bold yellow]DRY-RUN-GITHUB[/bold yellow] - Would remove: {trigger}")
+
+                # Process the trigger
+                if "showtime-trigger-start" in trigger:
+                    _handle_start_trigger(pr_number, github, dry_run_aws, dry_run_github, aws_sleep)
+                elif "showtime-trigger-stop" in trigger:
+                    _handle_stop_trigger(pr_number, github, dry_run_aws, dry_run_github)
+                elif "showtime-trigger-sync" in trigger:
+                    _handle_sync_trigger(pr_number, github, dry_run_aws, dry_run_github, aws_sleep)
+
+            console.print("🎪 All explicit triggers processed!")
             return
 
-        console.print(f"🎪 Processing {len(trigger_labels)} trigger(s) for PR #{pr_number}")
-
-        for trigger in trigger_labels:
-            console.print(f"🎪 Processing: {trigger}")
-
-            # Remove trigger label immediately (atomic operation)
-            if not dry_run_github:
-                github.remove_label(pr_number, trigger)
-            else:
-                console.print(
-                    f"🎪 [bold yellow]DRY-RUN-GITHUB[/bold yellow] - Would remove: {trigger}"
-                )
-
-            # Process the trigger
-            if trigger == "🎪 trigger-start":
-                _handle_start_trigger(pr_number, github, dry_run_aws, dry_run_github, aws_sleep)
-            elif trigger == "🎪 trigger-stop":
-                _handle_stop_trigger(pr_number, github, dry_run_aws, dry_run_github)
-            elif trigger == "🎪 trigger-sync":
+        # 4. No explicit triggers - check for implicit sync needs
+        console.print("🎪 No explicit triggers found - checking for implicit sync needs")
+        
+        if pr.current_show:
+            # Environment exists - check if it needs updating
+            if pr.current_show.needs_update(latest_sha):
+                console.print(f"🎪 Environment outdated ({pr.current_show.sha} → {latest_sha[:7]}) - auto-syncing")
                 _handle_sync_trigger(pr_number, github, dry_run_aws, dry_run_github, aws_sleep)
-            elif trigger.startswith("🎪 conf-"):
-                _handle_config_trigger(pr_number, trigger, github, dry_run_aws, dry_run_github)
-
-        console.print("🎪 All triggers processed!")
+            else:
+                console.print(f"🎪 Environment is up to date ({pr.current_show.sha})")
+        else:
+            console.print(f"🎪 No environment exists for PR #{pr_number} - no action needed")
+            console.print("🎪 💡 Add '🎪 trigger-start' label to create an environment")
 
     except Exception as e:
         console.print(f"🎪 [bold red]Error processing triggers:[/bold red] {e}")
@@ -668,10 +773,62 @@ def handle_sync(pr_number: int):
 
 
 @app.command()
+def setup_labels(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what labels would be created"),
+):
+    """🎪 Set up GitHub label definitions with colors and descriptions"""
+    try:
+        from .core.label_colors import LABEL_DEFINITIONS, get_label_color, get_label_description
+        
+        github = GitHubInterface()
+        
+        console.print("🎪 [bold blue]Setting up circus tent label definitions...[/bold blue]")
+        
+        created_count = 0
+        updated_count = 0
+        
+        for label_name, definition in LABEL_DEFINITIONS.items():
+            color = definition["color"]
+            description = definition["description"]
+            
+            if dry_run:
+                console.print(f"🏷️ Would create: [bold]{label_name}[/bold]")
+                console.print(f"   Color: #{color}")
+                console.print(f"   Description: {description}")
+            else:
+                try:
+                    # Try to create or update the label
+                    success = github.create_or_update_label(label_name, color, description)
+                    if success:
+                        created_count += 1
+                        console.print(f"✅ Created: [bold]{label_name}[/bold]")
+                    else:
+                        updated_count += 1
+                        console.print(f"🔄 Updated: [bold]{label_name}[/bold]")
+                except Exception as e:
+                    console.print(f"❌ Failed to create {label_name}: {e}")
+        
+        if not dry_run:
+            console.print(f"\n🎪 [bold green]Label setup complete![/bold green]")
+            console.print(f"   📊 Created: {created_count}")
+            console.print(f"   🔄 Updated: {updated_count}")
+            console.print("\n🎪 [dim]Note: Dynamic labels (with SHA) are created automatically during deployment[/dim]")
+        
+    except Exception as e:
+        console.print(f"🎪 [bold red]Error setting up labels:[/bold red] {e}")
+
+
+@app.command()
 def cleanup(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be cleaned"),
     older_than: str = typer.Option(
-        "48h", "--older-than", help="Clean environments older than this"
+        "48h", "--older-than", help="Clean environments older than this (ignored if --respect-ttl)"
+    ),
+    respect_ttl: bool = typer.Option(
+        False, "--respect-ttl", help="Use individual TTL labels instead of global --older-than"
+    ),
+    max_age: Optional[str] = typer.Option(
+        None, "--max-age", help="Maximum age limit when using --respect-ttl (e.g., 7d)"
     ),
     cleanup_labels: bool = typer.Option(
         True,
@@ -729,7 +886,10 @@ def cleanup(
             console.print(f"🎪 [bold red]AWS cleanup failed:[/bold red] {e}")
 
         # Step 2: Find and clean up expired environments from PRs
-        console.print(f"🎪 Finding environments older than {older_than}")
+        if respect_ttl:
+            console.print("🎪 Finding environments expired based on individual TTL labels")
+        else:
+            console.print(f"🎪 Finding environments older than {older_than}")
         prs_with_shows = github.find_prs_with_shows()
 
         if not prs_with_shows:
@@ -740,25 +900,48 @@ def cleanup(
             import re
             from datetime import datetime, timedelta
 
-            from .core.circus import PullRequest
+            from .core.circus import PullRequest, get_effective_ttl, parse_ttl_days
 
-            # Parse the older_than parameter (e.g., "48h", "7d")
-            time_match = re.match(r"(\d+)([hd])", older_than)
-            if not time_match:
-                console.print(f"🎪 [bold red]Invalid time format:[/bold red] {older_than}")
-                return
-
-            hours = int(time_match.group(1))
-            if time_match.group(2) == "d":
-                hours *= 24
-
-            cutoff_time = datetime.now() - timedelta(hours=hours)
+            # Parse max_age if provided (safety ceiling)
+            max_age_days = None
+            if max_age:
+                max_age_days = parse_ttl_days(max_age)
 
             cleaned_prs = 0
             for pr_number in prs_with_shows:
                 try:
                     pr = PullRequest.from_id(pr_number, github)
                     expired_shows = []
+
+                    if respect_ttl:
+                        # Use individual TTL labels
+                        effective_ttl_days = get_effective_ttl(pr)
+                        
+                        if effective_ttl_days is None:
+                            # "never" label found - skip cleanup
+                            console.print(f"🎪 [blue]PR #{pr_number} marked as 'never expire' - skipping[/blue]")
+                            continue
+                        
+                        # Apply max_age ceiling if specified
+                        if max_age_days and effective_ttl_days > max_age_days:
+                            console.print(f"🎪 [yellow]PR #{pr_number} TTL ({effective_ttl_days}d) exceeds max-age ({max_age_days}d)[/yellow]")
+                            effective_ttl_days = max_age_days
+                        
+                        cutoff_time = datetime.now() - timedelta(days=effective_ttl_days)
+                        console.print(f"🎪 PR #{pr_number} effective TTL: {effective_ttl_days} days")
+                        
+                    else:
+                        # Use global older_than parameter (current behavior)
+                        time_match = re.match(r"(\d+)([hd])", older_than)
+                        if not time_match:
+                            console.print(f"🎪 [bold red]Invalid time format:[/bold red] {older_than}")
+                            return
+
+                        hours = int(time_match.group(1))
+                        if time_match.group(2) == "d":
+                            hours *= 24
+
+                        cutoff_time = datetime.now() - timedelta(hours=hours)
 
                     # Check all shows in the PR for expiration
                     for show in pr.shows:
@@ -845,6 +1028,8 @@ def _handle_start_trigger(
     dry_run_aws: bool = False,
     dry_run_github: bool = False,
     aws_sleep: int = 0,
+    image_tag_override: Optional[str] = None,
+    force: bool = False,
 ):
     """Handle start trigger"""
     import os
@@ -976,6 +1161,8 @@ def _handle_start_trigger(
                 sha=latest_sha,
                 github_user=github_actor,
                 feature_flags=feature_flags,
+                image_tag_override=image_tag_override,
+                force=force,
             )
 
             if result.success:
@@ -1296,60 +1483,6 @@ Your latest changes are now live.
     except Exception as e:
         console.print(f"🎪 [bold red]Sync trigger failed:[/bold red] {e}")
 
-
-def _handle_config_trigger(
-    pr_number: int,
-    trigger: str,
-    github: GitHubInterface,
-    dry_run_aws: bool = False,
-    dry_run_github: bool = False,
-):
-    """Handle configuration trigger"""
-    from .core.circus import merge_config, parse_configuration_command
-
-    console.print(f"🎪 Configuring environment for PR #{pr_number}: {trigger}")
-
-    try:
-        command = parse_configuration_command(trigger)
-        if not command:
-            console.print(f"🎪 [bold red]Invalid config trigger:[/bold red] {trigger}")
-            return
-
-        pr = PullRequest.from_id(pr_number, github)
-
-        if not pr.current_show:
-            console.print(f"🎪 No active environment for PR #{pr_number}")
-            return
-
-        show = pr.current_show
-        console.print(f"🎪 Applying config: {command} to {show.aws_service_name}")
-
-        # Update configuration
-        new_config = merge_config(show.config, command)
-        console.print(f"🎪 Config: {show.config} → {new_config}")
-
-        if dry_run_aws:
-            console.print("🎪 [bold yellow]DRY-RUN-AWS[/bold yellow] - Would update feature flags")
-            console.print(f"  Command: {command}")
-            console.print(f"  New config: {new_config}")
-        else:
-            # TODO: Real feature flag update
-            console.print(
-                "🎪 [bold yellow]Real feature flag update not yet implemented[/bold yellow]"
-            )
-
-        # Update config in labels
-        show.config = new_config
-        updated_labels = show.to_circus_labels()
-        console.print("🎪 Updating config labels")
-
-        # TODO: Actually update labels
-        # github.set_labels(pr_number, updated_labels)
-
-        console.print("🎪 [bold green]Configuration updated![/bold green]")
-
-    except Exception as e:
-        console.print(f"🎪 [bold red]Config trigger failed:[/bold red] {e}")
 
 
 def main():
