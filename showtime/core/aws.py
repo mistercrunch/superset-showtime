@@ -139,7 +139,7 @@ class AWSInterface:
 
             # Step 4: Create new green service
             print(f"🟢 Creating green service: {service_name}")
-            success = self._create_ecs_service(service_name, pr_number, github_user)
+            success = self._create_ecs_service(service_name, pr_number, github_user, task_def_arn)
             if not success:
                 return EnvironmentResult(success=False, error="Green service creation failed")
 
@@ -373,14 +373,16 @@ class AWSInterface:
         except Exception:
             return False
 
-    def _create_ecs_service(self, service_name: str, pr_number: int, github_user: str) -> bool:
+    def _create_ecs_service(
+        self, service_name: str, pr_number: int, github_user: str, task_def_arn: str
+    ) -> bool:
         """Create ECS service (replicate exact GHA create-service step)"""
         try:
             # Replicate exact GHA create-service command parameters
             self.ecs_client.create_service(
                 cluster=self.cluster,
                 serviceName=service_name,  # pr-{pr_number}-service
-                taskDefinition=self.cluster,  # Uses cluster name as task def family
+                taskDefinition=task_def_arn,  # Use our custom task definition with env vars
                 launchType="FARGATE",
                 desiredCount=1,
                 platformVersion="LATEST",

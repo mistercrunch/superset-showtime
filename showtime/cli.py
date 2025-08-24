@@ -33,8 +33,8 @@ def _show_service_urls(show, context: str = "deployment"):
     """Show helpful AWS Console URLs for monitoring service"""
     urls = _get_service_urls(show)
     console.print(f"\n🎪 [bold blue]Monitor {context} progress:[/bold blue]")
-    console.print(f"   📝 Live Logs: {urls['logs']}")
-    console.print(f"   📊 ECS Service: {urls['service']}")
+    console.print(f"📝 Logs: {urls['logs']}")
+    console.print(f"📊 Service: {urls['service']}")
     console.print("")
 
 
