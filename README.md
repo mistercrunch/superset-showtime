@@ -189,30 +189,19 @@ You'll see:
 
 ### GitHub Actions Integration
 
-Showtime is designed to be called by Superset's GitHub Actions workflows:
+**🎯 Live Workflow**: [showtime-trigger.yml](https://github.com/apache/superset/actions/workflows/showtime-trigger.yml)
 
-```yaml
-# .github/workflows/showtime.yml - Integrates with Superset's existing build workflows
-on:
-  pull_request_target:
-    types: [labeled, unlabeled, synchronize]
+**How it works:**
+- Triggers on PR label changes, commits, and closures
+- Installs `superset-showtime` from PyPI (trusted code, not PR code)
+- Runs `showtime sync` to handle trigger processing and deployments
+- Supports manual testing via `workflow_dispatch` with specific SHA override
 
-jobs:
-  showtime-handler:
-    if: contains(github.event.label.name, '🎪')
-    steps:
-      - name: Install Showtime from PyPI
-        run: pip install superset-showtime
-
-      - name: Process circus triggers
-        run: python -m showtime handle-trigger ${{ github.event.pull_request.number }}
+**Commands used:**
+```bash
+showtime sync PR_NUMBER --check-only    # Determine build_needed + target_sha
+showtime sync PR_NUMBER --sha SHA       # Execute atomic claim + build + deploy
 ```
-
-**Integration approach:**
-- **Coordinates with Superset builds** - Uses existing container build workflows
-- **Runs trusted code** (from PyPI, not PR code)
-- **Simple orchestration logic** (install CLI and run commands)
-- **Leverages existing infrastructure** - Same AWS resources and permissions
 
 ## 🛠️ Installation & Setup
 
