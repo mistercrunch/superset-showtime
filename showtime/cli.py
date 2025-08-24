@@ -18,12 +18,9 @@ from .core.github import GitHubError, GitHubInterface
 DEFAULT_GITHUB_ACTOR = "unknown"
 
 
-def _get_service_urls(pr_number: int, sha: str = None):
+def _get_service_urls(show):
     """Get AWS Console URLs for a service"""
-    if sha:
-        service_name = f"pr-{pr_number}-{sha}-service"
-    else:
-        service_name = f"pr-{pr_number}-service"
+    service_name = show.ecs_service_name
 
     return {
         "logs": f"https://us-west-2.console.aws.amazon.com/ecs/v2/clusters/superset-ci/services/{service_name}/logs?region=us-west-2",
@@ -31,9 +28,9 @@ def _get_service_urls(pr_number: int, sha: str = None):
     }
 
 
-def _show_service_urls(pr_number: int, context: str = "deployment", sha: str = None):
+def _show_service_urls(show, context: str = "deployment"):
     """Show helpful AWS Console URLs for monitoring service"""
-    urls = _get_service_urls(pr_number, sha)
+    urls = _get_service_urls(show)
     console.print(f"\n🎪 [bold blue]Monitor {context} progress:[/bold blue]")
     console.print(f"   📝 Live Logs: {urls['logs']}")
     console.print(f"   📊 ECS Service: {urls['service']}")
@@ -340,19 +337,19 @@ def stop(
             console.print("🎪 [bold blue]Starting AWS cleanup...[/bold blue]")
             aws = AWSInterface()
 
-            # Show logs URL for monitoring cleanup
-            _show_service_urls(pr_number, "cleanup")
-
             try:
                 # Get current environment info
                 pr = PullRequest.from_id(pr_number, github)
 
                 if pr.current_show:
                     show = pr.current_show
+
+                    # Show logs URL for monitoring cleanup
+                    _show_service_urls(show, "cleanup")
                     console.print(f"🎪 Destroying environment: {show.aws_service_name}")
 
                     # Step 1: Check if ECS service exists and is active
-                    service_name = f"pr-{pr_number}-service"  # Match GHA service naming
+                    service_name = show.ecs_service_name
                     console.print(f"🎪 Checking ECS service: {service_name}")
 
                     service_exists = aws._service_exists(service_name)
@@ -465,7 +462,7 @@ def list(
                 superset_url = "-"
 
             # Get AWS service URLs - iTerm2 supports Rich clickable links
-            aws_urls = _get_service_urls(show.pr_number, show.sha)
+            aws_urls = _get_service_urls(show)
             aws_logs_link = f"[link={aws_urls['logs']}]View[/link]"
 
             # Make PR number clickable
@@ -858,7 +855,13 @@ def cleanup(
                         console.print(
                             f"🎪 Deleting expired service {service_name} (PR #{pr_number}, {age_hours:.1f}h old)"
                         )
-                        _show_service_urls(pr_number, "cleanup")
+                        # Create minimal Show object for URL generation
+                        from .core.circus import Show
+
+                        temp_show = Show(
+                            pr_number=pr_number, sha=service_name.split("-")[2], status="cleanup"
+                        )
+                        _show_service_urls(temp_show, "cleanup")
 
                         # Delete ECS service
                         if aws._delete_ecs_service(service_name):
@@ -1146,7 +1149,7 @@ def _handle_start_trigger(
             aws = AWSInterface()
 
             # Show logs URL immediately for monitoring
-            _show_service_urls(pr_number, "deployment", latest_sha[:7])
+            _show_service_urls(show, "deployment")
 
             # Parse feature flags from PR description (replicate GHA feature flag logic)
             feature_flags = _extract_feature_flags_from_pr(pr_number, github)
@@ -1333,12 +1336,12 @@ def _handle_stop_trigger(
             console.print("🎪 [bold blue]Starting AWS cleanup...[/bold blue]")
             aws = AWSInterface()
 
-            # Show logs URL for monitoring cleanup
-            _show_service_urls(pr_number, "cleanup")
-
             try:
+                # Show logs URL for monitoring cleanup
+                _show_service_urls(show, "cleanup")
+
                 # Step 1: Check if ECS service exists and is active (replicate GHA describe-services)
-                service_name = f"pr-{pr_number}-service"  # Match GHA service naming
+                service_name = show.ecs_service_name
                 console.print(f"🎪 Checking ECS service: {service_name}")
 
                 service_exists = aws._service_exists(service_name)

@@ -35,6 +35,11 @@ class Show:
         return f"pr-{self.pr_number}-{self.sha}-ci"
 
     @property
+    def ecs_service_name(self) -> str:
+        """Deterministic ECS service name with -service suffix: pr-{pr_number}-{sha}-service"""
+        return f"{self.aws_service_name}-service"
+
+    @property
     def is_active(self) -> bool:
         """Check if this is the currently active show"""
         return self.status == "running"

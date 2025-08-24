@@ -83,7 +83,7 @@ class AWSInterface:
             requested_by=github_user,
         )
 
-        service_name = f"{show.aws_service_name}-service"  # pr-{pr_number}-{sha}-service
+        service_name = show.ecs_service_name  # pr-{pr_number}-{sha}-service
 
         try:
             # Handle force flag - delete existing service for this SHA first
