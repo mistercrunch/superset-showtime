@@ -77,9 +77,13 @@ jobs:
           echo "pr_number=$PR_NUM_OUT" >> $GITHUB_OUTPUT
           echo "target_sha=$TARGET_SHA" >> $GITHUB_OUTPUT
 
-      - name: Login to DockerHub (only if build needed)
+      - name: Setup Docker Environment (only if build needed)
         if: steps.check.outputs.build_needed == 'true'
-        run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USER }}" --password-stdin
+        uses: ./.github/actions/setup-docker
+        with:
+          dockerhub-user: ${{ env.DOCKERHUB_USER }}
+          dockerhub-token: ${{ env.DOCKERHUB_TOKEN }}
+          build: "true"
 
       - name: Checkout PR code (only if build needed)
         if: steps.check.outputs.build_needed == 'true'
