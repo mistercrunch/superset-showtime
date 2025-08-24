@@ -74,13 +74,6 @@ flowchart TD
     N --> P[🎪 Environment ready!]
 
     Q[User adds 🎪 🛑 trigger-stop] --> R[🧹 Cleanup AWS + Remove labels]
-
-    style A fill:#e1f5fe
-    style D fill:#ffebee
-    style E fill:#ffebee
-    style I fill:#fff3e0
-    style M fill:#e8f5e8
-    style N fill:#e8f5e8
 ```
 
 
