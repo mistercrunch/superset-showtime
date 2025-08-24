@@ -203,104 +203,17 @@ showtime sync PR_NUMBER --check-only    # Determine build_needed + target_sha
 showtime sync PR_NUMBER --sha SHA       # Execute atomic claim + build + deploy
 ```
 
-## 🛠️ Installation & Setup
+## 🛠️ CLI Usage
 
-### For Contributors (GitHub Labels Only)
-No installation needed! Just use GitHub labels to trigger environments.
+The CLI is primarily used by GitHub Actions, but available for debugging and advanced users:
 
-### For Maintainers (Manual CLI Operations)
-
-**Install CLI for debugging/testing:**
 ```bash
 pip install superset-showtime
-export GITHUB_TOKEN=your_personal_access_token
+export GITHUB_TOKEN=your_token
+showtime --help  # See all available commands
 ```
 
-**Manual operations:**
-```bash
-showtime list                    # Monitor all active environments
-showtime status 1234            # Debug specific environment
-showtime labels                 # Reference complete label system
-```
 
-### For Repository Integration (GitHub Actions)
-
-**1. Install GitHub workflows:**
-Copy `workflows-reference/showtime-trigger.yml` and `workflows-reference/showtime-cleanup.yml` to Superset's `.github/workflows/`.
-
-**2. Configure secrets (already exist in Superset):**
-- `AWS_ACCESS_KEY_ID`
-- `AWS_SECRET_ACCESS_KEY`
-- `GITHUB_TOKEN`
-
-**3. Dependencies:**
-Showtime coordinates with Superset's existing build infrastructure - no additional setup needed.
-
-## 📊 CLI Reference (For Development/Debugging)
-
-> **Primary Interface**: Use GitHub labels in PR interface. CLI is mainly for maintainers debugging or developing Showtime itself.
-
-### Debugging Commands
-```bash
-showtime list                         # Monitor all environments
-showtime status 1234                  # Debug specific environment
-showtime labels                       # Complete label reference
-showtime test-lifecycle 1234          # Full workflow simulation
-```
-
-### Manual Operations (Advanced)
-```bash
-showtime start 1234                    # Manually create environment
-showtime start 1234 --sha abc123f     # Create environment (specific SHA)
-showtime stop 1234                    # Manually delete environment
-showtime sync 1234                    # Force sync to desired state
-showtime cleanup --respect-ttl        # Manual cleanup
-```
-
-### GitHub Actions Commands
-```bash
-showtime handle-trigger 1234          # Process trigger labels (called by GHA)
-showtime cleanup --older-than 48h     # Scheduled cleanup (called by GHA)
-```
-
-## 🎪 Benefits for Superset
-
-### For Contributors
-- **🎯 Simple workflow** - Just add/remove GitHub labels
-- **👀 Visual feedback** - See environment status in PR labels
-- **⚡ Automatic updates** - New commits update environments automatically
-- **🔧 Configuration testing** - Test config changes through code commits
-
-### For Maintainers
-- **📊 Complete visibility** - `showtime list` shows all environments
-- **🧹 Easy cleanup** - Automatic expired environment cleanup
-- **🔍 Better debugging** - Clear state in labels, comprehensive CLI
-- **💰 Cost savings** - No duplicate environments, proper cleanup
-
-### For Operations
-- **📝 Simpler workflows** - Replace complex GHA scripts with simple CLI calls
-- **🔒 Same security model** - No new permissions needed
-- **🎯 Deterministic** - Predictable AWS resource naming
-- **🚨 Monitoring ready** - 48h maximum lifetime, scheduled cleanup
-
-## 🏗️ Architecture
-
-### State Management
-All state lives in **GitHub labels** - no external databases needed:
-- **Trigger labels** (`🎪 trigger-*`) - Commands that get processed and removed
-- **State labels** (`🎪 🚦 *`) - Current environment status, managed by CLI
-
-### AWS Resources
-Deterministic naming enables reliable cleanup:
-- **ECS Service:** `pr-{pr_number}-{sha}` (e.g., `pr-1234-abc123f`)
-- **ECR Image:** `pr-{pr_number}-{sha}-ci` (e.g., `pr-1234-abc123f-ci`)
-
-### Rolling Updates
-Zero-downtime updates by running multiple environments:
-1. Keep old environment serving traffic
-2. Build new environment in parallel
-3. Switch traffic when new environment is healthy
-4. Clean up old environment
 
 ## 🤝 Contributing
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Superset Showtime is a Python CLI tool for managing Apache Superset ephemeral environments using **circus tent emoji labels** as a state management system on GitHub PRs. The system replaces complex GitHub Actions scripts with a simple CLI that uses GitHub labels for ACID-like state transactions.
+Superset Showtime is a Python CLI tool for managing Apache Superset ephemeral environments using **circus tent emoji labels** as a state management system on GitHub PRs. The system implements **ACID-style atomic transactions** using GitHub labels as a distributed coordination mechanism, with **compare-and-swap** patterns to prevent race conditions.
 
 ## Development Commands
 
@@ -22,11 +22,11 @@ python -m showtime labels               # Complete label reference
 python -m showtime list                 # List all environments (requires GITHUB_TOKEN)
 python -m showtime test-lifecycle 1234  # Full workflow simulation
 
-# Test with real GitHub PRs safely
+# Test new unified sync command
 export GITHUB_TOKEN=xxx
-showtime start 34809 --dry-run-aws --aws-sleep 5    # Mock AWS, real GitHub labels
-showtime status 34809                                # Check environment status
-showtime stop 34809 --force                         # Clean up test labels
+showtime sync 34809 --check-only                    # Analyze what's needed
+showtime sync 34809 --dry-run-aws --dry-run-docker # Test full flow safely
+showtime set-state building 34809                   # Manual state transitions
 ```
 
 ### Testing Single Components
@@ -39,10 +39,19 @@ python -c "from showtime.core.circus import Show; show = Show(pr_number=1234, sh
 ## Architecture Overview
 
 ### Core State Management Pattern
-The system uses **GitHub labels as a distributed state machine**:
-- **Trigger labels** (`🎪 trigger-start`) - Commands added by users, processed and removed by CLI
-- **State labels** (`🎪 🚦 abc123f running`) - Per-SHA status managed by CLI
+The system uses **GitHub labels as a distributed ACID-style database**:
+- **Trigger labels** (`🎪 ⚡ showtime-trigger-start`) - Commands added by users, atomically processed and removed
+- **State labels** (`🎪 abc123f 🚦 building`) - Per-SHA status managed with atomic compare-and-swap operations
 - **No external database** - All state reconstructed from GitHub labels
+- **Race condition prevention** - Atomic claim prevents double-processing of triggers
+
+### Enhanced State Lifecycle
+**Complete state progression**: `building → built → deploying → running/failed`
+- **building**: Docker image construction in progress
+- **built**: Docker build complete, ready for AWS deployment
+- **deploying**: AWS ECS deployment in progress
+- **running**: Environment live and accessible
+- **failed**: Build or deployment failed
 
 ### Key Classes and Responsibilities
 
@@ -96,8 +105,9 @@ Replicates current GitHub Actions AWS logic:
 - **Security model**: `pull_request_target` + PyPI install (no PR code execution)
 
 #### CLI Commands Called by GHA
-- `showtime handle-trigger {pr-number}` - Process trigger labels
-- `showtime handle-sync {pr-number}` - Handle new commits
+- `showtime sync {pr-number} --check-only` - Analyze state and determine build_needed
+- `showtime sync {pr-number} --sha {sha}` - Execute atomic claim + build + deploy
+- `showtime set-state {state} {pr-number}` - Manual state transitions
 - `showtime cleanup --older-than 48h` - Scheduled cleanup
 
 ## Important Implementation Details
@@ -114,14 +124,22 @@ The CLI has comprehensive dry-run support for safe testing:
 ```bash
 --dry-run-aws        # Skip AWS operations, use mock data
 --dry-run-github     # Skip GitHub operations, show what would happen
+--dry-run-docker     # Skip Docker build, use mock success
 --aws-sleep N        # Sleep N seconds to simulate AWS timing
 ```
 
-### AWS Resource Naming
-Must maintain compatibility with existing Superset infrastructure:
+### AWS Resource Naming & Docker Integration
+**Direct Docker build** (no supersetbot dependency):
+- **Docker Image**: `apache/superset:pr-{pr_number}-{sha}-ci` (single tag, built directly)
 - **ECS Service**: `pr-{pr_number}-{sha}` (e.g., `pr-1234-abc123f`)
-- **ECR Image**: `pr-{pr_number}-{sha}-ci`
 - **Network**: Same subnets/security groups as current production setup
+
+**Docker Build Command**:
+```bash
+docker buildx build --push --load --platform linux/amd64 --target ci \
+  --build-arg INCLUDE_CHROMIUM=false --build-arg LOAD_EXAMPLES_DUCKDB=true \
+  -t apache/superset:pr-{pr}-{sha}-ci .
+```
 
 ### State Recovery Pattern
 Since the CLI is stateless, it always reconstructs state from GitHub labels:
@@ -133,15 +151,22 @@ show = pr.current_show                       # Finds active environment
 
 ## Critical Development Notes
 
-### Label Operations Must Be Atomic
-GitHub label operations are the "database transactions" - handle carefully:
+### ACID-Style Atomic Transactions
+GitHub label operations implement compare-and-swap pattern for race condition prevention:
 ```python
-# Remove trigger immediately after processing
-github.remove_label(pr_number, trigger_label)
-# Update state labels atomically
-github.remove_circus_labels(pr_number)
-for label in new_labels:
-    github.add_label(pr_number, label)
+# Atomic claim pattern in _atomic_claim_environment():
+# 1. CHECK: Validate current state allows new work
+# 2. COMPARE: Ensure triggers exist and state is valid
+# 3. SWAP: Remove triggers + Set building state atomically
+# 4. COMMIT: Environment successfully claimed
+
+# Example atomic transaction:
+if not _validate_non_active_state(pr):
+    return False  # Another job already active
+github.remove_label(pr_number, trigger_label)  # Remove trigger
+github.remove_circus_labels(pr_number)         # Clear stale state
+for label in building_show.to_circus_labels():
+    github.add_label(pr_number, label)         # Set building state
 ```
 
 ### Per-SHA Format Required
@@ -166,16 +191,14 @@ showtime stop 34809 --force
 
 ## Current Implementation Status
 
-### ✅ Fully Implemented (Production Ready)
-- **Blue-green deployment**: Zero-downtime updates with health checks
-- **AWS integration**: Complete ECS/ECR operations with DockerHub pulling
-- **Smart sync system**: Intelligent PR state detection and auto-sync
-- **GitHub Actions workflows**: Drop-in replacement for ephemeral-env.yml
-- **TTL-based cleanup**: Respects individual environment preferences
-- **SHA override support**: Deploy any specific commit for testing
-- **Freeze functionality**: Pin environments during testing
-- **Enhanced CLI**: Clickable links, full-width tables, real-time progress
-- **Unified label system**: Searchable namespaced labels with color themes
+### ✅ Current Architecture (Production Ready)
+- **ACID-style transactions**: Atomic compare-and-swap prevents race conditions
+- **Direct Docker integration**: No supersetbot dependency, single tag builds
+- **Streamlined GitHub Actions**: 3-step workflow (check → setup → sync)
+- **Enhanced state machine**: building→built→deploying→running/failed lifecycle
+- **Unified sync command**: Handles atomic claim + build + deploy in one command
+- **Smart conditionals**: Skip Docker setup when build_needed=false
+- **Race condition safe**: Multiple jobs can't double-process triggers
 
 ### 🎯 Label System (Streamlined)
 - **Trigger labels**: `🎪 ⚡ showtime-trigger-start` (namespaced, searchable)
@@ -183,8 +206,16 @@ showtime stop 34809 --force
 - **Freeze support**: `🎪 🧊 showtime-freeze` (prevents auto-sync)
 - **Automatic creation**: Labels get proper colors/descriptions automatically
 
-### 📦 Ready for Deployment
-- **GitHub Actions**: `workflows-reference/showtime-trigger.yml` + `showtime-cleanup.yml`
-- **PyPI package**: Built with dependencies, ready for `pip install superset-showtime`
-- **Testing infrastructure**: Comprehensive dry-run and manual testing support
-- **Documentation**: Complete README with workflows and examples
+### 📦 Key Commands for Development
+```bash
+# Core sync command (replaces handle-trigger, handle-sync):
+showtime sync PR_NUMBER --check-only        # Returns build_needed + target_sha
+showtime sync PR_NUMBER --sha SHA           # Atomic claim + build + deploy
+
+# Manual state management:
+showtime set-state building PR_NUMBER       # Set specific state
+showtime set-state failed PR_NUMBER --error-msg "Build failed"
+
+# Development testing:
+showtime sync PR_NUMBER --dry-run-aws --dry-run-docker --dry-run-github
+```
