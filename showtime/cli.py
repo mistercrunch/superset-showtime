@@ -24,7 +24,8 @@ def _get_service_urls(show):
 
     return {
         "logs": f"https://us-west-2.console.aws.amazon.com/ecs/v2/clusters/superset-ci/services/{service_name}/logs?region=us-west-2",
-        "service": f"https://us-west-2.console.aws.amazon.com/ecs/v2/clusters/superset-ci/services/{service_name}",
+        "service": f"https://us-west-2.console.aws.amazon.com/ecs/v2/clusters/superset-ci/services/{service_name}?region=us-west-2",
+        "health": f"https://us-west-2.console.aws.amazon.com/ecs/v2/clusters/superset-ci/services/{service_name}/health?region=us-west-2",
     }
 
 
@@ -173,6 +174,9 @@ def start(
     image_tag: Optional[str] = typer.Option(
         None, "--image-tag", help="Override ECR image tag (e.g., pr-34764-ci)"
     ),
+    docker_tag: Optional[str] = typer.Option(
+        None, "--docker-tag", help="Override Docker image tag (e.g., pr-34639-9a82c20-ci, latest)"
+    ),
     force: bool = typer.Option(
         False, "--force", help="Force re-deployment by deleting existing service"
     ),
@@ -213,7 +217,7 @@ def start(
         # Create environment using trigger handler logic
         console.print(f"🎪 [bold blue]Creating environment for PR #{pr_number}...[/bold blue]")
         _handle_start_trigger(
-            pr_number, github, dry_run_aws, (dry_run or False), aws_sleep, image_tag, force
+            pr_number, github, dry_run_aws, (dry_run or False), aws_sleep, docker_tag, force
         )
 
     except GitHubError as e:
@@ -592,7 +596,7 @@ def test_lifecycle(
         github = GitHubInterface()
 
         console.print("🎪 [bold]Step 1: Simulate trigger-start[/bold]")
-        _handle_start_trigger(pr_number, github, dry_run_aws, dry_run_github, aws_sleep)
+        _handle_start_trigger(pr_number, github, dry_run_aws, dry_run_github, aws_sleep, None)
 
         console.print()
         console.print("🎪 [bold]Step 2: Simulate config update[/bold]")
@@ -631,6 +635,9 @@ def sync(
     ),
     aws_sleep: int = typer.Option(
         0, "--aws-sleep", help="Seconds to sleep during AWS operations (for testing)"
+    ),
+    docker_tag: Optional[str] = typer.Option(
+        None, "--docker-tag", help="Override Docker image tag (e.g., pr-34639-9a82c20-ci, latest)"
     ),
 ):
     """🎪 Intelligently sync PR to desired state (called by GitHub Actions)"""
@@ -700,7 +707,9 @@ def sync(
 
                 # Process the trigger
                 if "showtime-trigger-start" in trigger:
-                    _handle_start_trigger(pr_number, github, dry_run_aws, dry_run_github, aws_sleep)
+                    _handle_start_trigger(
+                        pr_number, github, dry_run_aws, dry_run_github, aws_sleep, docker_tag
+                    )
                 elif "showtime-trigger-stop" in trigger:
                     _handle_stop_trigger(pr_number, github, dry_run_aws, dry_run_github)
 
@@ -1028,7 +1037,7 @@ def _handle_start_trigger(
     dry_run_aws: bool = False,
     dry_run_github: bool = False,
     aws_sleep: int = 0,
-    image_tag_override: Optional[str] = None,
+    docker_tag_override: Optional[str] = None,
     force: bool = False,
 ):
     """Handle start trigger"""
@@ -1160,7 +1169,7 @@ def _handle_start_trigger(
                 sha=latest_sha,
                 github_user=github_actor,
                 feature_flags=feature_flags,
-                image_tag_override=image_tag_override,
+                image_tag_override=docker_tag_override,
                 force=force,
             )
 
@@ -1172,12 +1181,12 @@ def _handle_start_trigger(
                 # Show helpful links for the new service
                 console.print("\n🎪 [bold blue]Useful Links:[/bold blue]")
                 console.print(f"   🌐 Environment: http://{result.ip}:8080")
-                console.print(
-                    f"   📊 ECS Service: https://us-west-2.console.aws.amazon.com/ecs/v2/clusters/superset-ci/services/{result.service_name}"
-                )
-                console.print(
-                    f"   📝 Service Logs: https://us-west-2.console.aws.amazon.com/ecs/v2/clusters/superset-ci/services/{result.service_name}/logs?region=us-west-2"
-                )
+
+                # Use centralized URL generation
+                urls = _get_service_urls(show)
+                console.print(f"   📊 ECS Service: {urls['service']}")
+                console.print(f"   📝 Service Logs: {urls['logs']}")
+                console.print(f"   🏥 Health Checks: {urls['health']}")
                 console.print(
                     f"   🔍 GitHub PR: https://github.com/apache/superset/pull/{pr_number}"
                 )
