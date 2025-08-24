@@ -35,6 +35,18 @@
                 {
                     "name": "SUPERSET__SQLALCHEMY_EXAMPLES_URI",
                     "value": "duckdb:////app/data/examples.duckdb"
+                },
+                {
+                    "name": "SUPERSET_LOG_LEVEL",
+                    "value": "DEBUG"
+                },
+                {
+                    "name": "PYTHONUNBUFFERED",
+                    "value": "1"
+                },
+                {
+                    "name": "PYTHONPATH",
+                    "value": "/app/docker/pythonpath_dev"
                 }
             ],
             "mountPoints": [],
