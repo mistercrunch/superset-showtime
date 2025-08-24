@@ -60,24 +60,27 @@ flowchart TD
     C -->|Already building| F[❌ Exit: Another job active]
     C -->|No triggers| G[❌ Exit: Nothing to do]
 
-    D --> H[🐳 Docker build]
+    D --> H[📋 State: building]
     E --> H
-    H -->|Success| I[☁️ AWS Deploy]
-    H -->|Fail| J[❌ Set failed]
+    H --> I[🐳 Docker build]
+    I -->|Success| J[📋 State: built]
+    I -->|Fail| K[📋 State: failed]
 
-    I -->|Success| K[✅ Set running + Post URL]
-    I -->|Fail| L[❌ Set failed + Post error]
+    J --> L[📋 State: deploying]
+    L --> M[☁️ AWS Deploy]
+    M -->|Success| N[📋 State: running]
+    M -->|Fail| O[📋 State: failed]
 
-    K --> M[🎪 Environment ready!]
+    N --> P[🎪 Environment ready!]
 
-    N[User adds 🎪 🛑 trigger-stop] --> O[🧹 Cleanup AWS + Remove labels]
+    Q[User adds 🎪 🛑 trigger-stop] --> R[🧹 Cleanup AWS + Remove labels]
 
     style A fill:#e1f5fe
     style D fill:#ffebee
     style E fill:#ffebee
-    style H fill:#fff3e0
-    style I fill:#e8f5e8
-    style K fill:#e8f5e8
+    style I fill:#fff3e0
+    style M fill:#e8f5e8
+    style N fill:#e8f5e8
 ```
 
 
