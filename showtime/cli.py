@@ -19,6 +19,7 @@ from .core.github_messages import (
     rolling_start_comment,
     rolling_success_comment,
     start_comment,
+    success_comment,
 )
 
 # Constants
@@ -1147,19 +1148,19 @@ def _handle_start_trigger(
                 )
 
             # Post success comment (only in dry-run-aws mode since we have mock IP)
-            success_comment = f"""🎪 @{github_actor} Environment ready at **http://{mock_ip}:8080**
-
-**Environment:** `{show.sha}`
-**Credentials:** admin / admin
-**TTL:** {show.ttl} (auto-cleanup)
-
-**Configuration:** Modify feature flags in your PR code for new SHA
-**Updates:** Environment updates automatically on new commits
-
-{_get_showtime_footer()}"""
+            # Create mock show with IP for success comment
+            mock_show = Show(
+                pr_number=show.pr_number,
+                sha=show.sha,
+                status="running",
+                ip=mock_ip,
+                ttl=show.ttl,
+                requested_by=show.requested_by,
+            )
+            success_comment_text = success_comment(mock_show)
 
             if not dry_run_github:
-                github.post_comment(pr_number, success_comment)
+                github.post_comment(pr_number, success_comment_text)
 
         else:
             # Real AWS operations
@@ -1257,19 +1258,12 @@ def _handle_start_trigger(
                     console.print("🎪 ✅ Labels updated to running state!")
 
                     # Post success comment with real IP
-                    success_comment = f"""🎪 @{github_actor} Environment ready at **http://{result.ip}:8080**
+                    # Update show with real IP for comment
+                    show.ip = result.ip
+                    show.status = "running"
+                    success_comment_text = success_comment(show, feature_count=len(feature_flags))
 
-**Environment:** `{show.sha}`
-**Credentials:** admin / admin
-**TTL:** {show.ttl} (auto-cleanup)
-**Feature flags:** {len(feature_flags)} enabled
-
-**Configuration:** Modify feature flags in your PR code for new SHA
-**Updates:** Environment updates automatically on new commits
-
-{_get_showtime_footer()}"""
-
-                    github.post_comment(pr_number, success_comment)
+                    github.post_comment(pr_number, success_comment_text)
 
             else:
                 console.print(f"🎪 [bold red]❌ AWS deployment failed:[/bold red] {result.error}")
