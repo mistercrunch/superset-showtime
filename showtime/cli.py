@@ -4,6 +4,7 @@
 Main command-line interface for Apache Superset circus tent environment management.
 """
 
+import subprocess
 from typing import Optional
 
 import typer
@@ -14,6 +15,8 @@ from .core.circus import PullRequest, Show, short_sha
 from .core.emojis import STATUS_DISPLAY
 from .core.github import GitHubError, GitHubInterface
 from .core.github_messages import (
+    building_comment,
+    failure_comment,
     get_aws_console_urls,
     rolling_failure_comment,
     rolling_start_comment,
@@ -176,12 +179,306 @@ def _get_showtime_footer() -> str:
     return "{_get_showtime_footer()}"
 
 
+def _validate_non_active_state(pr: PullRequest) -> bool:
+    """Check if PR is in a state where new work can begin
+
+    Args:
+        pr: PullRequest object with current state
+
+    Returns:
+        True if safe to start new work, False if another job is already active
+    """
+    if pr.current_show:
+        active_states = ["building", "built", "deploying", "running", "updating"]
+        if pr.current_show.status in active_states:
+            return False  # Already active
+    return True  # Safe to proceed
+
+
+def _atomic_claim_environment(
+    pr_number: int, target_sha: str, github: GitHubInterface, dry_run: bool = False
+) -> bool:
+    """Atomically claim environment for this job using compare-and-swap pattern
+
+    Args:
+        pr_number: PR number to claim
+        target_sha: Target commit SHA
+        github: GitHub interface for label operations
+        dry_run: If True, simulate operations
+
+    Returns:
+        True if successfully claimed, False if another job already active or no triggers
+    """
+    from datetime import datetime
+
+    try:
+        # 1. CHECK: Load current PR state
+        pr = PullRequest.from_id(pr_number, github)
+
+        # 2. VALIDATE: Ensure non-active state (compare part of compare-and-swap)
+        if not _validate_non_active_state(pr):
+            current_state = pr.current_show.status if pr.current_show else "unknown"
+            console.print(
+                f"🎪 Environment already active (state: {current_state}) - another job is running"
+            )
+            return False
+
+        # 3. FIND TRIGGERS: Must have triggers to claim
+        trigger_labels = [label for label in pr.labels if "showtime-trigger-" in label]
+        if not trigger_labels:
+            console.print("🎪 No trigger labels found - nothing to claim")
+            return False
+
+        # 4. VALIDATE TRIGGER-SPECIFIC STATE REQUIREMENTS
+        for trigger_label in trigger_labels:
+            if "showtime-trigger-start" in trigger_label:
+                # Start trigger: should NOT already be building/running
+                if pr.current_show and pr.current_show.status in [
+                    "building",
+                    "built",
+                    "deploying",
+                    "running",
+                ]:
+                    console.print(
+                        f"🎪 Start trigger invalid - environment already {pr.current_show.status}"
+                    )
+                    return False
+            elif "showtime-trigger-stop" in trigger_label:
+                # Stop trigger: should HAVE an active environment
+                if not pr.current_show or pr.current_show.status in ["failed"]:
+                    console.print("🎪 Stop trigger invalid - no active environment to stop")
+                    return False
+
+        console.print(f"🎪 Claiming environment for PR #{pr_number} SHA {target_sha[:7]}")
+        console.print(f"🎪 Found {len(trigger_labels)} valid trigger(s) to process")
+
+        if dry_run:
+            console.print(
+                "🎪 [bold yellow]DRY-RUN[/bold yellow] - Would atomically claim environment"
+            )
+            return True
+
+        # 4. ATOMIC SWAP: Remove triggers + Set building state (swap part)
+        console.print("🎪 Executing atomic claim (remove triggers + set building)...")
+
+        # Remove all trigger labels first
+        for trigger_label in trigger_labels:
+            console.print(f"  🗑️ Removing trigger: {trigger_label}")
+            github.remove_label(pr_number, trigger_label)
+
+        # Immediately set building state to claim the environment
+        building_show = Show(
+            pr_number=pr_number,
+            sha=short_sha(target_sha),
+            status="building",
+            created_at=datetime.utcnow().strftime("%Y-%m-%dT%H-%M"),
+            ttl="24h",
+            requested_by=_get_github_actor(),
+        )
+
+        # Clear any stale state and set building labels atomically
+        github.remove_circus_labels(pr_number)
+        for label in building_show.to_circus_labels():
+            github.add_label(pr_number, label)
+
+        console.print("🎪 ✅ Environment claimed successfully")
+        return True
+
+    except Exception as e:
+        console.print(f"🎪 ❌ Failed to claim environment: {e}")
+        return False
+
+
+def _build_docker_image(pr_number: int, sha: str, dry_run: bool = False) -> bool:
+    """Build Docker image directly without supersetbot dependency
+
+    Args:
+        pr_number: PR number for tagging
+        sha: Full commit SHA
+        dry_run: If True, print command but don't execute
+
+    Returns:
+        True if build succeeded, False if failed
+    """
+    tag = f"apache/superset:pr-{pr_number}-{short_sha(sha)}-ci"
+
+    cmd = [
+        "docker",
+        "buildx",
+        "build",
+        "--push",
+        "--load",
+        "--platform",
+        "linux/amd64",
+        "--target",
+        "ci",
+        "--build-arg",
+        "PY_VER=3.10-slim-bookworm",
+        "--build-arg",
+        "INCLUDE_CHROMIUM=false",
+        "--build-arg",
+        "LOAD_EXAMPLES_DUCKDB=true",
+        "-t",
+        tag,
+        ".",
+    ]
+
+    console.print(f"🐳 Building Docker image: {tag}")
+    if dry_run:
+        console.print(f"🎪 [bold yellow]DRY-RUN[/bold yellow] - Would run: {' '.join(cmd)}")
+        return True
+
+    try:
+        console.print(f"🎪 Running: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)  # 30 min timeout
+
+        if result.returncode == 0:
+            console.print(f"🎪 ✅ Docker build succeeded: {tag}")
+            return True
+        else:
+            console.print("🎪 ❌ Docker build failed:")
+            console.print(f"Exit code: {result.returncode}")
+            console.print(f"STDOUT: {result.stdout}")
+            console.print(f"STDERR: {result.stderr}")
+            return False
+
+    except subprocess.TimeoutExpired:
+        console.print("🎪 ❌ Docker build timed out after 30 minutes")
+        return False
+    except Exception as e:
+        console.print(f"🎪 ❌ Docker build error: {e}")
+        return False
+
+
+def _set_state_internal(
+    state: str,
+    pr_number: int,
+    show: Show,
+    github: GitHubInterface,
+    dry_run_github: bool = False,
+    error_msg: Optional[str] = None,
+) -> None:
+    """Internal helper to set state and handle comments/labels
+
+    Used by sync and other commands to set final state transitions
+    """
+    console.print(f"🎪 Setting state to '{state}' for PR #{pr_number} SHA {show.sha}")
+
+    # Update show state
+    show.status = state
+
+    # Handle state-specific logic
+    comment_text = None
+
+    if state == "building":
+        comment_text = building_comment(show)
+        console.print("🎪 Posting building comment...")
+
+    elif state == "running":
+        comment_text = success_comment(show)
+        console.print("🎪 Posting success comment...")
+
+    elif state == "failed":
+        error_message = error_msg or "Build or deployment failed"
+        comment_text = failure_comment(show, error_message)
+        console.print("🎪 Posting failure comment...")
+
+    elif state in ["built", "deploying"]:
+        console.print(f"🎪 Silent state change to '{state}' - no comment posted")
+
+    # Post comment if needed
+    if comment_text and not dry_run_github:
+        github.post_comment(pr_number, comment_text)
+        console.print("🎪 ✅ Comment posted!")
+    elif comment_text:
+        console.print("🎪 [bold yellow]DRY-RUN-GITHUB[/bold yellow] - Would post comment")
+
+    # Set state labels
+    state_labels = show.to_circus_labels()
+
+    if not dry_run_github:
+        github.remove_circus_labels(pr_number)
+        for label in state_labels:
+            github.add_label(pr_number, label)
+        console.print("🎪 ✅ Labels updated!")
+    else:
+        console.print("🎪 [bold yellow]DRY-RUN-GITHUB[/bold yellow] - Would update labels")
+
+
 @app.command()
 def version():
     """Show version information"""
     from . import __version__
 
     console.print(f"🎪 Superset Showtime v{__version__}")
+
+
+@app.command()
+def set_state(
+    state: str = typer.Argument(
+        ..., help="State to set (building, built, deploying, running, failed)"
+    ),
+    pr_number: int = typer.Argument(..., help="PR number to update"),
+    sha: Optional[str] = typer.Option(None, "--sha", help="Specific commit SHA (default: latest)"),
+    error_msg: Optional[str] = typer.Option(
+        None, "--error-msg", help="Error message for failed state"
+    ),
+    dry_run_github: bool = typer.Option(
+        False, "--dry-run-github", help="Skip GitHub operations, show what would happen"
+    ),
+):
+    """🎪 Set environment state (generic state transition command)
+
+    States:
+    • building - Docker image is being built (posts comment)
+    • built - Docker build complete, ready for deployment (silent)
+    • deploying - AWS deployment in progress (silent)
+    • running - Environment is live and ready (posts success comment)
+    • failed - Build or deployment failed (posts error comment)
+    """
+    from datetime import datetime
+
+    try:
+        github = GitHubInterface()
+
+        # Get SHA - use provided SHA or default to latest
+        if sha:
+            target_sha = sha
+            console.print(f"🎪 Using specified SHA: {target_sha[:7]}")
+        else:
+            target_sha = github.get_latest_commit_sha(pr_number)
+            console.print(f"🎪 Using latest SHA: {target_sha[:7]}")
+
+        # Validate state
+        valid_states = ["building", "built", "deploying", "running", "failed"]
+        if state not in valid_states:
+            console.print(f"❌ Invalid state: {state}. Must be one of: {', '.join(valid_states)}")
+            raise typer.Exit(1)
+
+        # Get GitHub actor
+        github_actor = _get_github_actor()
+
+        # Create or update show object
+        show = Show(
+            pr_number=pr_number,
+            sha=short_sha(target_sha),
+            status=state,
+            created_at=datetime.utcnow().strftime("%Y-%m-%dT%H-%M"),
+            ttl="24h",
+            requested_by=github_actor,
+        )
+
+        # Use internal helper to set state
+        _set_state_internal(state, pr_number, show, github, dry_run_github, error_msg)
+
+        console.print(f"🎪 [bold green]State successfully set to '{state}'[/bold green]")
+
+    except GitHubError as e:
+        console.print(f"❌ GitHub error: {e}")
+        raise typer.Exit(1) from e
+    except Exception as e:
+        console.print(f"❌ Error: {e}")
+        raise typer.Exit(1) from e
 
 
 @app.command()
@@ -648,14 +945,14 @@ def sync(
     check_only: bool = typer.Option(
         False, "--check-only", help="Check what actions are needed without executing"
     ),
-    deploy: bool = typer.Option(
-        False, "--deploy", help="Execute deployment actions (assumes build is complete)"
-    ),
     dry_run_aws: bool = typer.Option(
         False, "--dry-run-aws", help="Skip AWS operations, use mock data"
     ),
     dry_run_github: bool = typer.Option(
         False, "--dry-run-github", help="Skip GitHub label operations"
+    ),
+    dry_run_docker: bool = typer.Option(
+        False, "--dry-run-docker", help="Skip Docker build, use mock success"
     ),
     aws_sleep: int = typer.Option(
         0, "--aws-sleep", help="Seconds to sleep during AWS operations (for testing)"
@@ -685,17 +982,98 @@ def sync(
         action_needed = _determine_sync_action(pr, pr_state, target_sha)
 
         if check_only:
-            # Output structured results for GitHub Actions
-            console.print(f"action_needed={action_needed}")
-
-            # Build needed for new environments and updates (SHA changes)
+            # Output simple results for GitHub Actions
             build_needed = action_needed in ["create_environment", "rolling_update", "auto_sync"]
-            console.print(f"build_needed={str(build_needed).lower()}")
+            sync_needed = action_needed != "no_action"
 
-            # Deploy needed for everything except no_action
-            deploy_needed = action_needed != "no_action"
-            console.print(f"deploy_needed={str(deploy_needed).lower()}")
+            console.print(f"build_needed={str(build_needed).lower()}")
+            console.print(f"sync_needed={str(sync_needed).lower()}")
+            console.print(f"pr_number={pr_number}")
+            console.print(f"target_sha={target_sha}")
             return
+
+        # Default behavior: execute the sync (directive command)
+        # Use --check-only to override this and do read-only analysis
+        if not check_only:
+            console.print(
+                f"🎪 [bold blue]Syncing PR #{pr_number}[/bold blue] (SHA: {target_sha[:7]})"
+            )
+            console.print(f"🎪 Action needed: {action_needed}")
+
+            # For trigger-based actions, use atomic claim to prevent race conditions
+            if action_needed in ["create_environment", "rolling_update", "destroy_environment"]:
+                if not _atomic_claim_environment(pr_number, target_sha, github, dry_run_github):
+                    console.print("🎪 Unable to claim environment - exiting")
+                    return
+                console.print("🎪 ✅ Environment claimed - proceeding with work")
+
+            # Execute based on determined action
+            if action_needed == "cleanup":
+                console.print("🎪 PR is closed - cleaning up environment")
+                if pr.current_show:
+                    _handle_stop_trigger(pr_number, github, dry_run_aws, dry_run_github)
+                else:
+                    console.print("🎪 No environment to clean up")
+                return
+
+            elif action_needed in ["create_environment", "rolling_update"]:
+                # These require Docker build + deployment
+                console.print(f"🎪 Starting {action_needed} workflow")
+
+                # Post building comment (atomic claim already set building state)
+                if action_needed == "create_environment":
+                    console.print("🎪 Posting building comment...")
+                elif action_needed == "rolling_update":
+                    console.print("🎪 Posting rolling update comment...")
+
+                # Build Docker image
+                build_success = _build_docker_image(pr_number, target_sha, dry_run_docker)
+                if not build_success:
+                    _set_state_internal(
+                        "failed",
+                        pr_number,
+                        Show(
+                            pr_number=pr_number,
+                            sha=short_sha(target_sha),
+                            status="failed",
+                            requested_by=_get_github_actor(),
+                        ),
+                        github,
+                        dry_run_github,
+                        "Docker build failed",
+                    )
+                    return
+
+                # Continue with AWS deployment (reuse existing logic)
+                _handle_start_trigger(
+                    pr_number,
+                    github,
+                    dry_run_aws,
+                    dry_run_github,
+                    aws_sleep,
+                    docker_tag,
+                    force=True,
+                )
+                return
+
+            elif action_needed == "destroy_environment":
+                console.print("🎪 Destroying environment")
+                _handle_stop_trigger(pr_number, github, dry_run_aws, dry_run_github)
+                return
+
+            elif action_needed == "auto_sync":
+                console.print("🎪 Auto-sync on new commit")
+                # This also requires build + deployment
+                build_success = _build_docker_image(pr_number, target_sha, dry_run_docker)
+                if build_success:
+                    _handle_sync_trigger(pr_number, github, dry_run_aws, dry_run_github, aws_sleep)
+                else:
+                    console.print("🎪 ❌ Auto-sync failed due to build failure")
+                return
+
+            else:
+                console.print(f"🎪 No action needed ({action_needed})")
+                return
 
         console.print(
             f"🎪 [bold blue]Syncing PR #{pr_number}[/bold blue] (state: {pr_state}, SHA: {target_sha[:7]})"
@@ -1238,57 +1616,18 @@ def _handle_start_trigger(
                         )
                         _schedule_blue_cleanup(pr_number, blue_services)
 
-                # Update to running state with new SHA
-                show.status = "running"
+                # Update show with deployment result
                 show.ip = result.ip
 
-                # Traffic switching happens here - update GitHub labels atomically
-                running_labels = show.to_circus_labels()
-                console.print("\n🎪 Setting running state labels (traffic switch):")
-                for label in running_labels:
-                    console.print(f"  + {label}")
-
-                if not dry_run_github:
-                    console.print("🎪 Executing traffic switch via GitHub labels...")
-                    # Remove existing circus labels first
-                    github.remove_circus_labels(pr_number)
-                    # Add new running labels - this switches traffic atomically
-                    for label in running_labels:
-                        github.add_label(pr_number, label)
-                    console.print("🎪 ✅ Labels updated to running state!")
-
-                    # Post success comment with real IP
-                    # Update show with real IP for comment
-                    show.ip = result.ip
-                    show.status = "running"
-                    success_comment_text = success_comment(show, feature_count=len(feature_flags))
-
-                    github.post_comment(pr_number, success_comment_text)
+                # Use internal helper to set running state (posts success comment)
+                console.print("\n🎪 Traffic switching to running state:")
+                _set_state_internal("running", pr_number, show, github, dry_run_github)
 
             else:
                 console.print(f"🎪 [bold red]❌ AWS deployment failed:[/bold red] {result.error}")
 
-                # Update to failed state
-                show.status = "failed"
-                failed_labels = show.to_circus_labels()
-
-                if not dry_run_github:
-                    console.print("🎪 Setting failed state labels...")
-                    github.remove_circus_labels(pr_number)
-                    for label in failed_labels:
-                        github.add_label(pr_number, label)
-
-                    # Post failure comment
-                    failure_comment = f"""🎪 @{github_actor} Environment creation failed.
-
-**Error:** {result.error}
-**Environment:** `{show.sha}`
-
-Please check the logs and try again.
-
-{_get_showtime_footer()}"""
-
-                    github.post_comment(pr_number, failure_comment)
+                # Use internal helper to set failed state (posts failure comment)
+                _set_state_internal("failed", pr_number, show, github, dry_run_github, result.error)
 
     except Exception as e:
         console.print(f"🎪 [bold red]Start trigger failed:[/bold red] {e}")

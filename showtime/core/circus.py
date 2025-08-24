@@ -18,7 +18,7 @@ class Show:
 
     pr_number: int
     sha: str  # 7-char commit SHA
-    status: str  # building, running, updating, failed
+    status: str  # building, built, deploying, running, updating, failed
     ip: Optional[str] = None  # Environment IP address
     created_at: Optional[str] = None  # ISO timestamp
     ttl: str = "24h"  # 24h, 48h, close, etc.
@@ -53,6 +53,16 @@ class Show:
     def is_building(self) -> bool:
         """Check if environment is currently building"""
         return self.status == "building"
+
+    @property
+    def is_built(self) -> bool:
+        """Check if environment is built (Docker complete, ready for deploy)"""
+        return self.status == "built"
+
+    @property
+    def is_deploying(self) -> bool:
+        """Check if environment is currently deploying to AWS"""
+        return self.status == "deploying"
 
     @property
     def is_updating(self) -> bool:

@@ -96,8 +96,18 @@ def get_aws_console_urls(service_name: str) -> Dict[str, str]:
 # Typed comment functions with clear parameter requirements
 
 
+def building_comment(show: Show) -> str:
+    """Create building start comment
+
+    Args:
+        show: Show object with SHA and other metadata
+    """
+    links = _create_header_links(show.sha)
+    return f"🎪 {links['showtime_link']} is building environment on {links['gha_link']} for {links['commit_link']}"
+
+
 def start_comment(show: Show) -> str:
-    """Create environment start comment
+    """Create environment start comment (DEPRECATED - use building_comment)
 
     Args:
         show: Show object with SHA and other metadata
