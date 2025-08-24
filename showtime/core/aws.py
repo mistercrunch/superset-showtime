@@ -109,12 +109,12 @@ class AWSInterface:
                 docker_image = f"apache/superset:{image_tag_override}"
                 print(f"✅ Using override image: {docker_image}")
             else:
-                # Use supersetbot SHA-based format (what supersetbot creates)
-                supersetbot_tag = f"{sha[:7]}-ci"  # Matches supersetbot format: abc123f-ci
+                # Use supersetbot PR-SHA format (what supersetbot creates)
+                supersetbot_tag = show.aws_image_tag  # pr-{pr_number}-{sha}-ci
                 docker_image = f"apache/superset:{supersetbot_tag}"
-                print(f"✅ Using DockerHub image: {docker_image} (supersetbot SHA format)")
+                print(f"✅ Using DockerHub image: {docker_image} (supersetbot PR-SHA format)")
                 print(
-                    "💡 To test with different image: --image-tag latest or --image-tag abc123f-ci"
+                    "💡 To test with different image: --image-tag latest or --image-tag pr-34639-9a82c20-ci"
                 )
 
             # Note: No ECR image check needed - ECS will pull from DockerHub directly
