@@ -48,151 +48,38 @@ Superset Showtime is a CLI tool designed primarily for **GitHub Actions** to man
 🎪 abc123f 🌐 52-1-2-3      # Available at http://52.1.2.3:8080
 ```
 
-### 🔄 ACID-Style Transaction Flow
+### 🔄 Showtime Workflow
 
 ```mermaid
 flowchart TD
-    A[👤 User adds 🎪 ⚡ showtime-trigger-start] --> B[🎯 GitHub Actions: sync]
+    A[User adds 🎪 ⚡ trigger-start] --> B[GitHub Actions: sync]
+    B --> C{Current state?}
 
-    B --> C[🔍 Load current PR state]
-    C --> D{🔒 ACID Transaction:<br/>Can we claim this environment?}
+    C -->|No environment| D[🔒 Claim: Remove trigger + Set building]
+    C -->|Running + new SHA| E[🔒 Claim: Remove trigger + Set building]
+    C -->|Already building| F[❌ Exit: Another job active]
+    C -->|No triggers| G[❌ Exit: Nothing to do]
 
-    D -->|❌ Already active| E[🚫 Exit - another job running]
-    D -->|❌ No triggers| F[🚫 Exit - nothing to do]
-    D -->|❌ Invalid trigger| G[🚫 Exit - wrong state for trigger]
-    D -->|✅ Valid claim| H[⚡ ATOMIC OPERATIONS]
+    D --> H[🐳 Docker build]
+    E --> H
+    H -->|Success| I[☁️ AWS Deploy]
+    H -->|Fail| J[❌ Set failed]
 
-    H --> I[🗑️ Remove trigger labels]
-    I --> J[📝 Set building state labels]
-    J --> K[💬 Post building comment]
+    I -->|Success| K[✅ Set running + Post URL]
+    I -->|Fail| L[❌ Set failed + Post error]
 
-    K --> L[🐳 docker buildx build<br/>apache/superset:pr-{num}-{sha}-ci]
-    L -->|Success| M[📝 Set deploying state]
-    L -->|Failure| N[❌ Set failed state + comment]
+    K --> M[🎪 Environment ready!]
 
-    M --> O[☁️ Deploy to AWS ECS]
-    O -->|Success| P[📝 Set running state]
-    O -->|Failure| Q[❌ Set failed state + comment]
-
-    P --> R[💬 Post success comment<br/>🎪 {sha} 🚦 running<br/>🎪 {sha} 🌐 {ip}]
+    N[User adds 🎪 🛑 trigger-stop] --> O[🧹 Cleanup AWS + Remove labels]
 
     style A fill:#e1f5fe
-    style D fill:#fff3e0
-    style H fill:#ffebee
-    style L fill:#f3e5f5
-    style O fill:#e8f5e8
-    style R fill:#e8f5e8
+    style D fill:#ffebee
+    style E fill:#ffebee
+    style H fill:#fff3e0
+    style I fill:#e8f5e8
+    style K fill:#e8f5e8
 ```
 
-### 🔒 ACID Transaction Details
-
-```mermaid
-sequenceDiagram
-    participant GHA as GitHub Actions
-    participant S as Showtime
-    participant GL as GitHub Labels
-    participant D as Docker
-    participant AWS as AWS ECS
-
-    Note over GHA,S: ACID Transaction Boundary
-
-    GHA->>S: sync PR_NUMBER --sha ABC123F
-
-    Note over S: 1. CHECK - Load current state
-    S->>GL: Read all labels for PR
-    GL-->>S: Current labels + state
-
-    Note over S: 2. VALIDATE - Ensure safe to proceed
-    S->>S: current_state == "running"?
-    S->>S: triggers present?
-    S->>S: trigger valid for current state?
-
-    alt Invalid State or No Triggers
-        S-->>GHA: Exit early (no changes made)
-    else Valid - Begin ACID Transaction
-        Note over S,GL: 3. ATOMIC OPERATIONS
-        S->>GL: Remove trigger label(s)
-        S->>GL: Add building state labels
-        Note over S: 4. COMMIT - State claimed!
-
-        S->>GL: Post building comment
-        S->>D: docker buildx build
-        D-->>S: Build result
-
-        alt Build Success
-            S->>GL: Update to deploying state
-            S->>AWS: Deploy ECS service
-            AWS-->>S: Deployment result
-
-            alt Deploy Success
-                S->>GL: Update to running state + post success
-            else Deploy Failure
-                S->>GL: Update to failed state + post error
-            end
-        else Build Failure
-            S->>GL: Update to failed state + post error
-        end
-    end
-```
-
-### 🎭 State Transitions
-
-```mermaid
-stateDiagram-v2
-    [*] --> building : 🎪 ⚡ trigger-start
-    building --> built : Docker build complete
-    building --> failed : Docker build error
-    built --> deploying : Begin AWS deployment
-    deploying --> running : ECS deployment success
-    deploying --> failed : ECS deployment error
-    running --> building : New commit (rolling update)
-    running --> [*] : 🎪 🛑 trigger-stop
-    failed --> building : 🎪 ⚡ trigger-start (retry)
-    failed --> [*] : 🎪 🛑 trigger-stop
-
-    note right of building
-        🎪 abc123f 🚦 building
-        User sees immediate feedback
-    end note
-
-    note right of running
-        🎪 abc123f 🚦 running
-        🎪 abc123f 🌐 52-1-2-3
-        Environment ready!
-    end note
-```
-
-### 🔄 Blue-Green Deployment
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant GitHub
-    participant Showtime
-    participant Docker
-    participant AWS
-
-    User->>GitHub: New commit pushed
-    GitHub->>Showtime: sync --execute (auto-trigger)
-    Note over Showtime: Current: abc123f running<br/>New: def456a
-
-    Showtime->>GitHub: Post "Rolling update abc123f→def456a"
-    Showtime->>Docker: Build apache/superset:pr-X-def456a-ci
-    Docker-->>Showtime: Build complete
-
-    Showtime->>AWS: Deploy new ECS service (Green)
-    AWS-->>Showtime: New service healthy
-
-    Note over AWS: Traffic switch:<br/>Blue (abc123f) → Green (def456a)
-
-    Showtime->>GitHub: Update labels to def456a running
-    Showtime->>GitHub: Post "Environment updated" + new URL
-    Showtime->>AWS: Schedule cleanup of old service (Blue)
-```
-
-## 📊 For Maintainers (CLI Operations)
-
-> **Note**: CLI is mainly for debugging or developing Showtime itself. Primary interface is GitHub labels above.
 
 **Install CLI for debugging:**
 ```bash
