@@ -10,9 +10,16 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from .core.circus import PullRequest, Show
+from .core.circus import PullRequest, Show, short_sha
 from .core.emojis import STATUS_DISPLAY
 from .core.github import GitHubError, GitHubInterface
+from .core.github_messages import (
+    get_aws_console_urls,
+    rolling_failure_comment,
+    rolling_start_comment,
+    rolling_success_comment,
+    start_comment,
+)
 
 # Constants
 DEFAULT_GITHUB_ACTOR = "unknown"
@@ -20,13 +27,7 @@ DEFAULT_GITHUB_ACTOR = "unknown"
 
 def _get_service_urls(show):
     """Get AWS Console URLs for a service"""
-    service_name = show.ecs_service_name
-
-    return {
-        "logs": f"https://us-west-2.console.aws.amazon.com/ecs/v2/clusters/superset-ci/services/{service_name}/logs?region=us-west-2",
-        "service": f"https://us-west-2.console.aws.amazon.com/ecs/v2/clusters/superset-ci/services/{service_name}?region=us-west-2",
-        "health": f"https://us-west-2.console.aws.amazon.com/ecs/v2/clusters/superset-ci/services/{service_name}/health?region=us-west-2",
-    }
+    return get_aws_console_urls(show.ecs_service_name)
 
 
 def _show_service_urls(show, context: str = "deployment"):
@@ -150,6 +151,28 @@ app = typer.Typer(
 )
 
 console = Console()
+
+
+def _get_github_workflow_url() -> str:
+    """Get current GitHub Actions workflow URL"""
+    import os
+
+    return (
+        os.getenv("GITHUB_SERVER_URL", "https://github.com")
+        + f"/{os.getenv('GITHUB_REPOSITORY', 'repo')}/actions/runs/{os.getenv('GITHUB_RUN_ID', 'run')}"
+    )
+
+
+def _get_github_actor() -> str:
+    """Get current GitHub actor with fallback"""
+    import os
+
+    return os.getenv("GITHUB_ACTOR", DEFAULT_GITHUB_ACTOR)
+
+
+def _get_showtime_footer() -> str:
+    """Get consistent Showtime footer for PR comments"""
+    return "{_get_showtime_footer()}"
 
 
 @app.command()
@@ -1041,7 +1064,6 @@ def _handle_start_trigger(
     force: bool = False,
 ):
     """Handle start trigger"""
-    import os
     import time
     from datetime import datetime
 
@@ -1050,29 +1072,12 @@ def _handle_start_trigger(
     try:
         # Get latest SHA and GitHub actor
         latest_sha = github.get_latest_commit_sha(pr_number)
-        github_actor = os.getenv("GITHUB_ACTOR", DEFAULT_GITHUB_ACTOR)
-
-        # Post confirmation comment
-        workflow_url = (
-            os.getenv("GITHUB_SERVER_URL", "https://github.com")
-            + f"/{os.getenv('GITHUB_REPOSITORY', 'repo')}/actions/runs/{os.getenv('GITHUB_RUN_ID', 'run')}"
-        )
-
-        confirmation_comment = f"""🎪 @{github_actor} Creating ephemeral environment for commit `{latest_sha[:7]}`
-
-**Action:** [View workflow]({workflow_url})
-**Environment:** `{latest_sha[:7]}`
-**Powered by:** [Superset Showtime](https://github.com/mistercrunch/superset-showtime)
-
-*Building and deploying... Watch the labels for progress updates.*"""
-
-        if not dry_run_github:
-            github.post_comment(pr_number, confirmation_comment)
+        github_actor = _get_github_actor()
 
         # Create new show
         show = Show(
             pr_number=pr_number,
-            sha=latest_sha[:7],
+            sha=short_sha(latest_sha),
             status="building",
             created_at=datetime.utcnow().strftime("%Y-%m-%dT%H-%M"),
             ttl="24h",
@@ -1080,6 +1085,12 @@ def _handle_start_trigger(
         )
 
         console.print(f"🎪 Creating environment {show.aws_service_name}")
+
+        # Post confirmation comment
+        confirmation_comment = start_comment(show)
+
+        if not dry_run_github:
+            github.post_comment(pr_number, confirmation_comment)
 
         # Set building state labels
         building_labels = show.to_circus_labels()
@@ -1145,7 +1156,7 @@ def _handle_start_trigger(
 **Configuration:** Modify feature flags in your PR code for new SHA
 **Updates:** Environment updates automatically on new commits
 
-*Powered by [Superset Showtime](https://github.com/mistercrunch/superset-showtime)*"""
+{_get_showtime_footer()}"""
 
             if not dry_run_github:
                 github.post_comment(pr_number, success_comment)
@@ -1256,7 +1267,7 @@ def _handle_start_trigger(
 **Configuration:** Modify feature flags in your PR code for new SHA
 **Updates:** Environment updates automatically on new commits
 
-*Powered by [Superset Showtime](https://github.com/mistercrunch/superset-showtime)*"""
+{_get_showtime_footer()}"""
 
                     github.post_comment(pr_number, success_comment)
 
@@ -1281,7 +1292,7 @@ def _handle_start_trigger(
 
 Please check the logs and try again.
 
-*Powered by [Superset Showtime](https://github.com/mistercrunch/superset-showtime)*"""
+{_get_showtime_footer()}"""
 
                     github.post_comment(pr_number, failure_comment)
 
@@ -1320,7 +1331,6 @@ def _handle_stop_trigger(
     pr_number: int, github: GitHubInterface, dry_run_aws: bool = False, dry_run_github: bool = False
 ):
     """Handle stop trigger"""
-    import os
 
     console.print(f"🎪 Stopping environment for PR #{pr_number}")
 
@@ -1396,7 +1406,7 @@ def _handle_stop_trigger(
             github.remove_circus_labels(pr_number)
 
         # Post cleanup comment
-        github_actor = os.getenv("GITHUB_ACTOR", DEFAULT_GITHUB_ACTOR)
+        github_actor = _get_github_actor()
         cleanup_comment = f"""🎪 @{github_actor} Environment `{show.sha}` cleaned up
 
 **AWS Resources:** ECS service and ECR image deleted
@@ -1404,7 +1414,7 @@ def _handle_stop_trigger(
 
 Add `🎪 trigger-start` to create a new environment.
 
-*Powered by [Superset Showtime](https://github.com/mistercrunch/superset-showtime)*"""
+{_get_showtime_footer()}"""
 
         if not dry_run_github:
             github.post_comment(pr_number, cleanup_comment)
@@ -1477,14 +1487,73 @@ def _handle_sync_trigger(
 
 Your latest changes are now live.
 
-*Powered by [Superset Showtime](https://github.com/mistercrunch/superset-showtime)*"""
+{_get_showtime_footer()}"""
 
             if not dry_run_github:
                 github.post_comment(pr_number, update_comment)
 
         else:
-            # TODO: Real rolling update
-            console.print("🎪 [bold yellow]Real rolling update not yet implemented[/bold yellow]")
+            # Real rolling update - use same blue-green deployment logic
+
+            from .core.aws import AWSInterface, EnvironmentResult
+
+            console.print("🎪 [bold blue]Starting real rolling update...[/bold blue]")
+
+            # Post rolling update start comment
+            start_comment_text = rolling_start_comment(pr.current_show, latest_sha)
+
+            if not dry_run_github:
+                github.post_comment(pr_number, start_comment_text)
+
+            aws = AWSInterface()
+
+            # Get feature flags from PR description
+            feature_flags = _extract_feature_flags_from_pr(pr_number, github)
+            github_actor = _get_github_actor()
+
+            # Use blue-green deployment (create_environment handles existing services)
+            result: EnvironmentResult = aws.create_environment(
+                pr_number=pr_number,
+                sha=latest_sha,
+                github_user=github_actor,
+                feature_flags=feature_flags,
+                force=False,  # Don't force - let blue-green handle it
+            )
+
+            if result.success:
+                console.print(
+                    f"🎪 [bold green]✅ Rolling update complete![/bold green] New IP: {result.ip}"
+                )
+
+                # Update labels to point to new service
+                pr.refresh_labels(github)
+                new_show = pr.get_show_by_sha(latest_sha)
+                if new_show:
+                    new_show.status = "running"
+                    new_show.ip = result.ip
+
+                    # Update GitHub labels
+                    github.remove_circus_labels(pr_number)
+                    for label in new_show.to_circus_labels():
+                        github.add_label(pr_number, label)
+
+                    console.print("🎪 ✅ Labels updated to point to new environment")
+
+                    # Post rolling update success comment
+                    success_comment_text = rolling_success_comment(pr.current_show, new_show)
+
+                    if not dry_run_github:
+                        github.post_comment(pr_number, success_comment_text)
+            else:
+                console.print(f"🎪 [bold red]❌ Rolling update failed:[/bold red] {result.error}")
+
+                # Post rolling update failure comment
+                failure_comment_text = rolling_failure_comment(
+                    pr.current_show, latest_sha, result.error
+                )
+
+                if not dry_run_github:
+                    github.post_comment(pr_number, failure_comment_text)
 
     except Exception as e:
         console.print(f"🎪 [bold red]Sync trigger failed:[/bold red] {e}")

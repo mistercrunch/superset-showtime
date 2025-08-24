@@ -40,6 +40,11 @@ class Show:
         return f"{self.aws_service_name}-service"
 
     @property
+    def short_sha(self) -> str:
+        """7-character SHA for display (GitHub standard)"""
+        return self.sha[:7]
+
+    @property
     def is_active(self) -> bool:
         """Check if this is the currently active show"""
         return self.status == "running"
@@ -267,3 +272,8 @@ def get_effective_ttl(pr) -> Optional[float]:
 
     # Use longest duration if multiple labels
     return max(ttl_labels)
+
+
+def short_sha(full_sha: str) -> str:
+    """Truncate SHA to 7 characters for display (GitHub standard)"""
+    return full_sha[:7]
