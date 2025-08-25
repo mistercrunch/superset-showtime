@@ -157,11 +157,13 @@ class Show:
 
     def _build_docker_image(self) -> None:
         """Build Docker image for this environment"""
+        import os
+        import platform
         import subprocess
 
         tag = f"apache/superset:pr-{self.pr_number}-{self.sha}-ci"
 
-        # Build for Linux (ECR) - don't use --load with cross-platform
+        # Base command
         cmd = [
             "docker",
             "buildx",
@@ -183,6 +185,17 @@ class Show:
             tag,
             ".",
         ]
+
+        # Add --load only when building for native architecture or explicitly requested
+        # Intel Mac/Linux can load linux/amd64, Apple Silicon cannot
+        native_x86 = platform.machine() in ("x86_64", "AMD64")
+        force_load = os.getenv("DOCKER_LOAD", "false").lower() == "true"
+        
+        if native_x86 or force_load:
+            cmd.insert(-1, "--load")  # Insert before the "." argument
+            print("🐳 Will load image to local Docker daemon (native x86_64 platform)")
+        else:
+            print("🐳 Cross-platform build - pushing to registry only (no local load)")
 
         print(f"🐳 Building Docker image: {tag}")
 
