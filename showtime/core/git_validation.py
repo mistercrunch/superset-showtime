@@ -68,28 +68,18 @@ def validate_required_sha(required_sha: Optional[str] = None) -> Tuple[bool, Opt
     try:
         repo = Repo(".")
 
-        # Check if SHA exists in repository
+        # Search for SHA in git log (has to work in shallow clones where merge_base fails)
         try:
-            commit = repo.commit(sha_to_check)
-
-            # Check if SHA is reachable from current HEAD
-            # This ensures the required commit is in our branch history
-            try:
-                repo.merge_base(commit, repo.head.commit)
+            log_output = repo.git.log("--oneline", "--all")
+            if sha_to_check in log_output or sha_to_check[:7] in log_output:
                 return True, None
-            except Exception:
-                # SHA exists but not in current branch history
+            else:
                 return False, (
-                    f"Required commit {sha_to_check} exists but is not reachable from current HEAD. "
-                    f"Please ensure your branch includes the required commit."
+                    f"Required commit {sha_to_check} not found in Git history. "
+                    f"Please update to a branch that includes this commit."
                 )
-
-        except Exception:
-            # SHA doesn't exist in repository
-            return False, (
-                f"Required commit {sha_to_check} not found in repository. "
-                f"Please update to a branch that includes this commit."
-            )
+        except Exception as e:
+            return False, f"Git log search failed: {e}"
 
     except InvalidGitRepositoryError:
         return False, "Current directory is not a Git repository"

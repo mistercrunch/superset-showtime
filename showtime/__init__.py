@@ -4,7 +4,7 @@
 Circus tent emoji state tracking for Apache Superset ephemeral environments.
 """
 
-__version__ = "0.5.7"
+__version__ = "0.5.9"
 __author__ = "Maxime Beauchemin"
 __email__ = "maximebeauchemin@gmail.com"
 

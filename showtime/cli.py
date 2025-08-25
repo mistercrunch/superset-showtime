@@ -815,6 +815,31 @@ def cleanup(
         p(f"❌ Cleanup failed: {e}")
 
 
+@app.command()
+def git_check() -> None:
+    """🔍 Test Git SHA validation locally"""
+    from rich import print as p
+
+    from .core.git_validation import REQUIRED_SHA, validate_required_sha
+
+    p("🔍 [bold blue]Testing Git SHA Validation[/bold blue]")
+    p(f"Required SHA: [cyan]{REQUIRED_SHA}[/cyan]")
+
+    try:
+        is_valid, error_msg = validate_required_sha()
+
+        if is_valid:
+            p(
+                "✅ [bold green]Validation PASSED[/bold green] - Required commit found in Git history"
+            )
+        else:
+            p("❌ [bold red]Validation FAILED[/bold red]")
+            p(f"Error: {error_msg}")
+
+    except Exception as e:
+        p(f"❌ [bold red]Validation ERROR[/bold red]: {e}")
+
+
 def main() -> None:
     """Main entry point for the CLI"""
     app()
