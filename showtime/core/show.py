@@ -189,16 +189,16 @@ class Show:
             # Full registry caching in CI (Docker driver supports it)
             cmd.extend([
                 "--cache-from",
-                "type=registry,ref=apache/superset-cache:3.10-slim-bookworm",
+                "type=registry,ref=apache/superset-cache:showtime",
                 "--cache-to", 
-                "type=registry,mode=max,ref=apache/superset-cache:3.10-slim-bookworm",
+                "type=registry,mode=max,ref=apache/superset-cache:showtime",
             ])
             print("🐳 CI environment: Using full registry caching")
         else:
             # Local build: cache-from only (no cache export)
             cmd.extend([
                 "--cache-from",
-                "type=registry,ref=apache/superset-cache:3.10-slim-bookworm",
+                "type=registry,ref=apache/superset-cache:showtime",
             ])
             print("🐳 Local environment: Using cache-from only (no export)")
 

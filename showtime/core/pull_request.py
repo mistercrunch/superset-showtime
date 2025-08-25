@@ -518,20 +518,27 @@ class PullRequest:
         for old_status_label in sha_status_labels:
             get_github().remove_label(self.pr_number, old_status_label)
 
-        # Now do normal differential updates
-        current_labels = {label for label in self.labels if label.startswith("🎪")}
+        # Now do normal differential updates - only for this SHA
+        current_sha_labels = {
+            label for label in self.labels 
+            if label.startswith("🎪") and (
+                label.startswith(f"🎪 {show.sha} ") or  # SHA-first format: 🎪 abc123f 📅 ...
+                label.startswith(f"🎪 🎯 {show.sha}") or  # Pointer format: 🎪 🎯 abc123f
+                label.startswith(f"🎪 🏗️ {show.sha}")    # Building pointer: 🎪 🏗️ abc123f
+            )
+        }
         desired_labels = set(show.to_circus_labels())
 
         # Remove the status labels we already cleaned up from the differential
-        current_labels = current_labels - set(sha_status_labels)
+        current_sha_labels = current_sha_labels - set(sha_status_labels)
 
         # Only add labels that don't exist
-        labels_to_add = desired_labels - current_labels
+        labels_to_add = desired_labels - current_sha_labels
         for label in labels_to_add:
             get_github().add_label(self.pr_number, label)
 
         # Only remove labels that shouldn't exist (excluding status labels already handled)
-        labels_to_remove = current_labels - desired_labels
+        labels_to_remove = current_sha_labels - desired_labels
         for label in labels_to_remove:
             get_github().remove_label(self.pr_number, label)
 
