@@ -5,7 +5,6 @@ Centralized PR comment functions with type hints and clean formatting.
 """
 
 import os
-import textwrap
 from typing import Dict, List, Optional
 
 from .circus import Show
@@ -60,13 +59,7 @@ def _format_comment(header: str, bullets: List[str]) -> str:
         bullets: List of bullet point strings (without •)
     """
     bullet_text = "\n".join(f"• {bullet}" for bullet in bullets)
-    return textwrap.dedent(
-        f"""
-        {header}
-
-        {bullet_text}
-    """
-    ).strip()
+    return f"{header}\n\n{bullet_text}"
 
 
 def get_commit_url(repo_path: str, sha: str) -> str:
