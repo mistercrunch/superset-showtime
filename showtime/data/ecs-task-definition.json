@@ -43,10 +43,6 @@
                 {
                     "name": "PYTHONUNBUFFERED",
                     "value": "1"
-                },
-                {
-                    "name": "PYTHONPATH",
-                    "value": "/app/docker/pythonpath_dev"
                 }
             ],
             "mountPoints": [],
