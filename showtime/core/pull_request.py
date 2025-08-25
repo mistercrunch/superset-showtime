@@ -364,10 +364,12 @@ class PullRequest:
         if trigger_labels:
             for trigger in trigger_labels:
                 if "showtime-trigger-start" in trigger:
-                    if self.current_show and self.current_show.needs_update(target_sha):
+                    if self.current_show and self.current_show.status == "failed":
+                        return "create_environment"  # Replace failed environment
+                    elif self.current_show and self.current_show.needs_update(target_sha):
                         return "rolling_update"
                     elif self.current_show:
-                        return "no_action"  # Same commit
+                        return "no_action"  # Same commit, healthy environment
                     else:
                         return "create_environment"
                 elif "showtime-trigger-stop" in trigger:

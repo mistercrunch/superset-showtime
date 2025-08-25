@@ -206,6 +206,12 @@ def status(
         if show_data["requested_by"]:
             table.add_row("Requested by", f"@{show_data['requested_by']}")
 
+        # Show active triggers
+        trigger_labels = [label for label in pr.labels if "showtime-trigger-" in label]
+        if trigger_labels:
+            trigger_display = ", ".join([label.replace("🎪 ", "").replace("showtime-trigger-", "") for label in trigger_labels])
+            table.add_row("Active Triggers", f"⚡ {trigger_display}")
+
         if verbose:
             table.add_row("All Labels", ", ".join(pr.circus_labels))
 
