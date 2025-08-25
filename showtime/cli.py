@@ -722,7 +722,7 @@ def aws_cleanup(
                 parts = pr_match.split("-")
                 if len(parts) >= 2:
                     pr_number = int(parts[0])
-                    success = aws.delete_environment(service.replace("-service", ""), pr_number)
+                    success = aws.delete_environment(service, pr_number)
                     if success:
                         p(f"✅ Deleted {service}")
                         deleted_count += 1

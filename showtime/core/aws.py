@@ -175,36 +175,62 @@ class AWSInterface:
 
     def delete_environment(self, service_name: str, pr_number: int) -> bool:
         """
-        Delete ephemeral environment - replicates cleanup GHA logic
+        Delete ephemeral environment with proper verification
 
         Steps:
-        1. Check if ECS service exists and is active
-        2. Delete ECS service with --force
+        1. Check if ECS service exists 
+        2. Delete ECS service with force and wait for completion
         3. Delete ECR image tag
+        4. Verify deletion completed
         """
         try:
-            # Step 1: Check if service exists and is active
-            if not self._service_exists(service_name):
-                return True  # Already deleted
+            ecs_service_name = f"{service_name}-service" if not service_name.endswith("-service") else service_name
+            print(f"🗑️ Deleting ECS service: {ecs_service_name}")
+            
+            # Step 1: Check if service exists
+            if not self._service_exists(ecs_service_name):
+                print(f"✅ Service {ecs_service_name} already deleted")
+                return True
 
-            # Step 2: Delete ECS service (force delete)
-            self.ecs_client.delete_service(cluster=self.cluster, service=service_name, force=True)
+            # Step 2: Delete ECS service (force delete) and wait
+            print(f"☁️ Initiating ECS service deletion...")
+            delete_response = self.ecs_client.delete_service(
+                cluster=self.cluster, 
+                service=ecs_service_name, 
+                force=True
+            )
+            print(f"🔄 Delete initiated: {delete_response.get('service', {}).get('status', 'unknown')}")
 
-            # Step 3: Delete ECR image tag
-            # Extract SHA from service name: pr-1234-abc123f → abc123f
-            sha = service_name.split("-")[-1]
-            image_tag = f"pr-{pr_number}-{sha}"
+            # Step 3: Wait for deletion to complete (crucial!)
+            print(f"⏳ Waiting for service deletion to complete...")
+            deletion_success = self._wait_for_service_deletion(ecs_service_name, timeout_minutes=10)
+            
+            if not deletion_success:
+                print(f"⚠️ Service deletion timeout - service may still exist")
+                return False
+
+            # Step 4: Delete ECR image tag
+            print(f"🐳 Cleaning up Docker image...")
+            # Fix SHA extraction: pr-34831-ac533ec-service → ac533ec
+            # Remove "pr-" prefix and "-service" suffix, then get SHA (last part)
+            base_name = service_name.replace("pr-", "").replace("-service", "")
+            parts = base_name.split("-")
+            sha = parts[-1] if len(parts) > 1 else base_name  # Last part is SHA
+            image_tag = f"pr-{pr_number}-{sha}-ci"
 
             try:
                 self.ecr_client.batch_delete_image(
                     repositoryName=self.repository, imageIds=[{"imageTag": image_tag}]
                 )
+                print(f"✅ Deleted ECR image: {image_tag}")
             except self.ecr_client.exceptions.ImageNotFoundException:
-                pass  # Image already deleted
+                print(f"ℹ️ ECR image {image_tag} already deleted")
 
+            print(f"✅ Environment {service_name} fully deleted")
             return True
 
         except Exception as e:
+            print(f"❌ AWS deletion failed: {e}")
             raise AWSError(
                 message=str(e), operation="delete_environment", resource=service_name
             ) from e

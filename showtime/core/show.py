@@ -202,16 +202,14 @@ class Show:
             ])
             print("🐳 Local environment: Using cache-from only (no export)")
 
-        # Add --load only when building for native architecture or explicitly requested
-        # Intel Mac/Linux can load linux/amd64, Apple Silicon cannot
-        native_x86 = platform.machine() in ("x86_64", "AMD64")
+        # Add --load only when explicitly requested for local testing
         force_load = os.getenv("DOCKER_LOAD", "false").lower() == "true"
         
-        if native_x86 or force_load:
+        if force_load:
             cmd.append("--load")
-            print("🐳 Will load image to local Docker daemon (native x86_64 platform)")
+            print("🐳 Will load image to local Docker daemon (DOCKER_LOAD=true)")
         else:
-            print("🐳 Cross-platform build - pushing to registry only (no local load)")
+            print("🐳 Push-only build (no local load) - faster for CI/deployment")
 
         # Add build context path last
         cmd.append(".")

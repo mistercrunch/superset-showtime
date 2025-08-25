@@ -450,17 +450,31 @@ class PullRequest:
 
         # 2. Remove trigger labels (atomic operation)
         trigger_labels = [label for label in self.labels if "showtime-trigger-" in label]
-        for trigger_label in trigger_labels:
-            get_github().remove_label(self.pr_number, trigger_label)
+        if trigger_labels:
+            print(f"🏷️ Removing trigger labels: {trigger_labels}")
+            for trigger_label in trigger_labels:
+                get_github().remove_label(self.pr_number, trigger_label)
+        else:
+            print("🏷️ No trigger labels to remove")
 
         # 3. Set building state immediately (claim the PR)
         if action in ["create_environment", "rolling_update", "auto_sync"]:
             building_show = self._create_new_show(target_sha)
             building_show.status = "building"
+            
             # Update labels to reflect building state
+            print(f"🏷️ Removing existing circus labels...")
             get_github().remove_circus_labels(self.pr_number)
-            for label in building_show.to_circus_labels():
-                get_github().add_label(self.pr_number, label)
+            
+            new_labels = building_show.to_circus_labels()
+            print(f"🏷️ Creating new labels: {new_labels}")
+            for label in new_labels:
+                try:
+                    get_github().add_label(self.pr_number, label)
+                    print(f"  ✅ Added: {label}")
+                except Exception as e:
+                    print(f"  ❌ Failed to add {label}: {e}")
+                    raise
 
         return True
 
