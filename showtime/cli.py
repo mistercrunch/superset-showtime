@@ -196,7 +196,11 @@ def _validate_non_active_state(pr: PullRequest) -> bool:
 
 
 def _atomic_claim_environment(
-    pr_number: int, target_sha: str, github: GitHubInterface, dry_run: bool = False
+    pr_number: int,
+    target_sha: str,
+    github: GitHubInterface,
+    dry_run: bool = False,
+    auto_sync: bool = False,
 ) -> bool:
     """Atomically claim environment for this job using compare-and-swap pattern
 
@@ -223,11 +227,13 @@ def _atomic_claim_environment(
             )
             return False
 
-        # 3. FIND TRIGGERS: Must have triggers to claim
+        # 3. FIND TRIGGERS: Must have triggers to claim (unless auto_sync)
         trigger_labels = [label for label in pr.labels if "showtime-trigger-" in label]
-        if not trigger_labels:
+        if not trigger_labels and not auto_sync:
             console.print("🎪 No trigger labels found - nothing to claim")
             return False
+        elif auto_sync and not trigger_labels:
+            console.print("🎪 Auto-sync: no triggers to remove, proceeding with state claim")
 
         # 4. VALIDATE TRIGGER-SPECIFIC STATE REQUIREMENTS
         for trigger_label in trigger_labels:
@@ -335,6 +341,7 @@ def _build_docker_image(pr_number: int, sha: str, dry_run: bool = False) -> bool
         console.print("🎪 Streaming Docker build output...")
 
         # Stream output in real-time for better user experience
+
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -348,13 +355,17 @@ def _build_docker_image(pr_number: int, sha: str, dry_run: bool = False) -> bool
         for line in process.stdout:
             console.print(f"🐳 {line.rstrip()}")
 
-        # Wait for completion with timeout
-        try:
-            return_code = process.wait(timeout=3600)  # 60 min timeout
-        except subprocess.TimeoutExpired:
-            process.kill()
-            console.print("🎪 ❌ Docker build timed out after 60 minutes")
-            return False
+        # Check if process finished or we need to wait
+        if process.poll() is None:
+            # Process still running, wait with timeout
+            try:
+                return_code = process.wait(timeout=300)  # 5 min final wait
+            except subprocess.TimeoutExpired:
+                process.kill()
+                console.print("🎪 ❌ Docker build timed out - process may have hung")
+                return False
+        else:
+            return_code = process.returncode
 
         if return_code == 0:
             console.print(f"🎪 ✅ Docker build succeeded: {tag}")
@@ -1017,9 +1028,17 @@ def sync(
             )
             console.print(f"🎪 Action needed: {action_needed}")
 
-            # For trigger-based actions, use atomic claim to prevent race conditions
-            if action_needed in ["create_environment", "rolling_update", "destroy_environment"]:
-                if not _atomic_claim_environment(pr_number, target_sha, github, dry_run_github):
+            # For all environment changes, use atomic claim to prevent race conditions
+            if action_needed in [
+                "create_environment",
+                "rolling_update",
+                "auto_sync",
+                "destroy_environment",
+            ]:
+                is_auto_sync = action_needed == "auto_sync"
+                if not _atomic_claim_environment(
+                    pr_number, target_sha, github, dry_run_github, is_auto_sync
+                ):
                     console.print("🎪 Unable to claim environment - exiting")
                     return
                 console.print("🎪 ✅ Environment claimed - proceeding with work")
@@ -1033,14 +1052,14 @@ def sync(
                     console.print("🎪 No environment to clean up")
                 return
 
-            elif action_needed in ["create_environment", "rolling_update"]:
-                # These require Docker build + deployment
+            elif action_needed in ["create_environment", "rolling_update", "auto_sync"]:
+                # These all require Docker build + deployment - use unified flow
                 console.print(f"🎪 Starting {action_needed} workflow")
 
-                # Post building comment (atomic claim already set building state)
+                # Post appropriate comment (atomic claim already set building state)
                 if action_needed == "create_environment":
                     console.print("🎪 Posting building comment...")
-                elif action_needed == "rolling_update":
+                elif action_needed in ["rolling_update", "auto_sync"]:
                     console.print("🎪 Posting rolling update comment...")
 
                 # Build Docker image
@@ -1076,16 +1095,6 @@ def sync(
             elif action_needed == "destroy_environment":
                 console.print("🎪 Destroying environment")
                 _handle_stop_trigger(pr_number, github, dry_run_aws, dry_run_github)
-                return
-
-            elif action_needed == "auto_sync":
-                console.print("🎪 Auto-sync on new commit")
-                # This also requires build + deployment
-                build_success = _build_docker_image(pr_number, target_sha, dry_run_docker)
-                if build_success:
-                    _handle_sync_trigger(pr_number, github, dry_run_aws, dry_run_github, aws_sleep)
-                else:
-                    console.print("🎪 ❌ Auto-sync failed due to build failure")
                 return
 
             else:
