@@ -4,6 +4,7 @@
 Handles atomic transactions, trigger processing, and environment orchestration.
 """
 
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, List, Optional
@@ -244,6 +245,9 @@ class PullRequest:
                 show.status = "running"
                 print(f"✅ Deployment completed - environment running at {show.ip}:8080")
                 self._update_show_labels(show, dry_run_github)
+                
+                # Show AWS console URLs for monitoring
+                self._show_service_urls(show)
 
                 self._post_success_comment(show, dry_run_github)
                 return SyncResult(success=True, action_taken="create_environment", show=show)
@@ -273,6 +277,9 @@ class PullRequest:
                 new_show.status = "running"
                 print(f"✅ Rolling update completed - new environment at {new_show.ip}:8080")
                 self._update_show_labels(new_show, dry_run_github)
+                
+                # Show AWS console URLs for monitoring
+                self._show_service_urls(new_show)
 
                 self._post_rolling_success_comment(old_show, new_show, dry_run_github)
                 return SyncResult(success=True, action_taken=action_needed, show=new_show)
@@ -424,7 +431,7 @@ class PullRequest:
             status="building",
             created_at=datetime.utcnow().strftime("%Y-%m-%dT%H-%M"),
             ttl="24h",
-            requested_by="github_actor",  # TODO: Get from context
+            requested_by=os.getenv("GITHUB_ACTOR", "unknown"),
         )
 
     def _post_building_comment(self, show: Show, dry_run: bool = False) -> None:
@@ -544,3 +551,13 @@ class PullRequest:
 
         # Final refresh to update cache with all changes
         self.refresh_labels()
+
+    def _show_service_urls(self, show: Show) -> None:
+        """Show AWS console URLs for monitoring deployment"""
+        from .github_messages import get_aws_console_urls
+        
+        urls = get_aws_console_urls(show.ecs_service_name)
+        print(f"\n🎪 Monitor deployment progress:")
+        print(f"📝 Logs: {urls['logs']}")
+        print(f"📊 Service: {urls['service']}")
+        print("")
