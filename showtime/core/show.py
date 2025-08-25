@@ -175,7 +175,7 @@ class Show:
             "--platform",
             "linux/amd64",
             "--target",
-            "ci",
+            "dev",
             "--build-arg",
             "INCLUDE_CHROMIUM=false",
             "--build-arg",
@@ -270,8 +270,10 @@ class Show:
                 elif emoji == "🤡":  # User (clown!)
                     show_data["requested_by"] = value
 
-        # Only return Show if we found relevant labels for this SHA
-        if any(label.endswith(f" {sha}") for label in labels if "🎯" in label or "🏗️" in label):
+        # Return Show if we found any status labels for this SHA
+        # For list purposes, we want to show ALL environments, even orphaned ones
+        has_status = any(label.startswith(f"🎪 {sha} 🚦 ") for label in labels)
+        if has_status:
             return cls(**show_data)  # type: ignore[arg-type]
 
         return None

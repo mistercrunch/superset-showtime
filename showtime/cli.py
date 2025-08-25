@@ -319,8 +319,10 @@ def list(
         # Create table with full terminal width
         table = Table(title="🎪 Environment List", expand=True)
         table.add_column("PR", style="cyan", min_width=6)
+        table.add_column("Type", style="white", min_width=8)
         table.add_column("Status", style="white", min_width=12)
         table.add_column("SHA", style="green", min_width=11)
+        table.add_column("Created", style="dim white", min_width=12)
         table.add_column("Superset URL", style="blue", min_width=25)
         table.add_column("AWS Logs", style="dim blue", min_width=15)
         table.add_column("TTL", style="yellow", min_width=6)
@@ -328,9 +330,23 @@ def list(
 
         status_emoji = STATUS_DISPLAY
 
-        for env in sorted(filtered_envs, key=lambda e: e["pr_number"]):
+        # Sort by PR number, then by show type (active first, then building, then orphaned)
+        type_priority = {"active": 1, "building": 2, "orphaned": 3}
+        sorted_envs = sorted(filtered_envs, key=lambda e: (e["pr_number"], type_priority.get(e["show"].get("show_type", "orphaned"), 3)))
+        
+        for env in sorted_envs:
             show_data = env["show"]
             pr_number = env["pr_number"]
+            
+            # Show type with appropriate styling (using single-width chars for alignment)
+            show_type = show_data.get("show_type", "orphaned")
+            if show_type == "active":
+                type_display = "* active"
+            elif show_type == "building": 
+                type_display = "# building"
+            else:
+                type_display = "! orphaned"
+            
             # Make Superset URL clickable and show full URL
             if show_data["ip"]:
                 full_url = f"http://{show_data['ip']}:8080"
@@ -348,10 +364,22 @@ def list(
             pr_url = f"https://github.com/apache/superset/pull/{pr_number}"
             clickable_pr = f"[link={pr_url}]{pr_number}[/link]"
 
+            # Format creation time for display
+            created_display = show_data.get("created_at", "-")
+            if created_display and created_display != "-":
+                # Convert 2025-08-25T05-18 to more readable format
+                try:
+                    parts = created_display.replace("T", " ").replace("-", ":")
+                    created_display = parts[-8:]  # Show just HH:MM:SS
+                except:
+                    pass  # Keep original if parsing fails
+
             table.add_row(
                 clickable_pr,
+                type_display,
                 f"{status_emoji.get(show_data['status'], '❓')} {show_data['status']}",
                 show_data["sha"],
+                created_display,
                 superset_url,
                 aws_logs_link,
                 show_data["ttl"],
@@ -613,6 +641,102 @@ def setup_labels(
 
     except Exception as e:
         p(f"🎪 [bold red]Error setting up labels:[/bold red] {e}")
+
+
+@app.command()
+def aws_cleanup(
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be cleaned"),
+    force: bool = typer.Option(False, "--force", help="Delete all showtime AWS resources"),
+) -> None:
+    """🧹 Clean up orphaned AWS resources without GitHub labels"""
+    try:
+        from .core.aws import AWSInterface
+        
+        aws = AWSInterface()
+        
+        p("🔍 [bold blue]Scanning for orphaned AWS resources...[/bold blue]")
+        
+        # 1. Get all GitHub PRs with circus labels
+        github_services = set()
+        try:
+            all_pr_numbers = PullRequest.find_all_with_environments()
+            p(f"📋 Found {len(all_pr_numbers)} PRs with circus labels:")
+            
+            for pr_number in all_pr_numbers:
+                pr = PullRequest.from_id(pr_number)
+                p(f"  🎪 PR #{pr_number}: {len(pr.shows)} shows, {len(pr.circus_labels)} circus labels")
+                
+                for show in pr.shows:
+                    service_name = show.ecs_service_name
+                    github_services.add(service_name)
+                    p(f"    📝 Expected service: {service_name}")
+                    
+                # Show labels for debugging
+                if not pr.shows:
+                    p(f"    ⚠️ No shows found, labels: {pr.circus_labels[:3]}...")  # First 3 labels
+                    
+        except Exception as e:
+            p(f"⚠️ GitHub scan failed: {e}")
+            github_services = set()
+        
+        # 2. Get all AWS ECS services matching showtime pattern
+        p("\n☁️ [bold blue]Scanning AWS ECS services...[/bold blue]")
+        try:
+            aws_services = aws.find_showtime_services()
+            p(f"🔍 Found {len(aws_services)} AWS services with pr-* pattern")
+            
+            for service in aws_services:
+                p(f"  ☁️ AWS: {service}")
+        except Exception as e:
+            p(f"❌ AWS scan failed: {e}")
+            return
+            
+        # 3. Find orphaned services
+        orphaned = [service for service in aws_services if service not in github_services]
+        
+        if not orphaned:
+            p("\n✅ [bold green]No orphaned AWS resources found![/bold green]")
+            return
+            
+        p(f"\n🚨 [bold red]Found {len(orphaned)} orphaned AWS resources:[/bold red]")
+        for service in orphaned:
+            p(f"  💰 {service} (consuming resources)")
+            
+        if dry_run:
+            p(f"\n🎪 [bold yellow]DRY RUN[/bold yellow] - Would delete {len(orphaned)} services")
+            return
+            
+        if not force:
+            confirm = typer.confirm(f"Delete {len(orphaned)} orphaned AWS services?")
+            if not confirm:
+                p("🎪 Cancelled")
+                return
+                
+        # 4. Delete orphaned resources
+        deleted_count = 0
+        for service in orphaned:
+            p(f"🗑️ Deleting {service}...")
+            try:
+                # Extract PR number for delete_environment call
+                pr_match = service.replace("pr-", "").replace("-service", "")
+                parts = pr_match.split("-")
+                if len(parts) >= 2:
+                    pr_number = int(parts[0])
+                    success = aws.delete_environment(service.replace("-service", ""), pr_number)
+                    if success:
+                        p(f"✅ Deleted {service}")
+                        deleted_count += 1
+                    else:
+                        p(f"❌ Failed to delete {service}")
+                else:
+                    p(f"❌ Invalid service name format: {service}")
+            except Exception as e:
+                p(f"❌ Error deleting {service}: {e}")
+                
+        p(f"\n🎪 ✅ Cleanup complete: deleted {deleted_count}/{len(orphaned)} services")
+        
+    except Exception as e:
+        p(f"❌ AWS cleanup failed: {e}")
 
 
 @app.command()

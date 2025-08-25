@@ -356,55 +356,93 @@ class PullRequest:
         all_environments = []
         for pr_number in pr_numbers:
             pr = cls.from_id(pr_number)
-            if pr.current_show:
-                status = pr.get_status()
-                status["pr_number"] = pr_number
-                all_environments.append(status)
+            # Show ALL environments, not just current_show
+            for show in pr.shows:
+                # Determine show type based on pointer presence
+                show_type = "orphaned"  # Default
+                
+                # Check for active pointer
+                if any(label == f"🎪 🎯 {show.sha}" for label in pr.labels):
+                    show_type = "active"
+                # Check for building pointer  
+                elif any(label == f"🎪 🏗️ {show.sha}" for label in pr.labels):
+                    show_type = "building"
+                # No pointer = orphaned
+                
+                environment_data = {
+                    "pr_number": pr_number,
+                    "status": "active",  # Keep for compatibility
+                    "show": {
+                        "sha": show.sha,
+                        "status": show.status,
+                        "ip": show.ip,
+                        "ttl": show.ttl,
+                        "requested_by": show.requested_by,
+                        "created_at": show.created_at,
+                        "aws_service_name": show.aws_service_name,
+                        "show_type": show_type,  # New field for display
+                    },
+                }
+                all_environments.append(environment_data)
 
         return all_environments
 
     def _determine_action(self, target_sha: str) -> str:
-        """Determine what sync action is needed"""
+        """Determine what sync action is needed based on target SHA state"""
+        target_sha_short = target_sha[:7]  # Ensure we're working with short SHA
+        
+        # Get the specific show for the target SHA
+        target_show = self.get_show_by_sha(target_sha_short)
+        
         # Check for explicit trigger labels
         trigger_labels = [label for label in self.labels if "showtime-trigger-" in label]
 
         if trigger_labels:
             for trigger in trigger_labels:
                 if "showtime-trigger-start" in trigger:
-                    if self.current_show and self.current_show.status == "failed":
-                        return "create_environment"  # Replace failed environment
-                    elif self.current_show and self.current_show.needs_update(target_sha):
-                        return "rolling_update"
-                    elif self.current_show:
-                        return "no_action"  # Same commit, healthy environment
+                    if not target_show or target_show.status == "failed":
+                        return "create_environment"  # New SHA or failed SHA
+                    elif target_show.status in ["building", "built", "deploying"]:
+                        return "no_action"  # Target SHA already in progress
+                    elif target_show.status == "running":
+                        return "create_environment"  # Force rebuild with trigger
                     else:
-                        return "create_environment"
+                        return "create_environment"  # Default for unknown states
                 elif "showtime-trigger-stop" in trigger:
                     return "destroy_environment"
 
-        # No explicit triggers - check for auto-sync or creation
-        if self.current_show and self.current_show.status != "failed" and self.current_show.needs_update(target_sha):
-            return "auto_sync"
-        elif not self.current_show or self.current_show.status == "failed":
-            # No environment exists OR failed environment - allow creation without trigger (for CLI start)
+        # No explicit triggers - check target SHA state
+        if not target_show:
+            # Target SHA doesn't exist - create it
             return "create_environment"
+        elif target_show.status == "failed":
+            # Target SHA failed - rebuild it
+            return "create_environment"
+        elif target_show.status in ["building", "built", "deploying"]:
+            # Target SHA in progress - wait
+            return "no_action"
+        elif target_show.status == "running":
+            # Target SHA already running - no action needed
+            return "no_action"
 
         return "no_action"
 
     def _atomic_claim(self, target_sha: str, action: str, dry_run: bool = False) -> bool:
-        """Atomically claim this PR for the current job"""
-        # 1. Validate current state allows this action
+        """Atomically claim this PR for the current job based on target SHA state"""
+        target_sha_short = target_sha[:7]
+        target_show = self.get_show_by_sha(target_sha_short)
+        
+        # 1. Validate current state allows this action for target SHA
         if action in ["create_environment", "rolling_update", "auto_sync"]:
-            if self.current_show and self.current_show.status in [
+            if target_show and target_show.status in [
                 "building",
                 "built", 
                 "deploying",
             ]:
-                return False  # Another job active
+                return False  # Target SHA already in progress
             
-            # For rolling updates, running environments are OK to update
-            if action in ["rolling_update", "auto_sync"] and self.current_show and self.current_show.status == "running":
-                return True  # Allow rolling updates on running environments
+            # Allow actions on failed, running, or non-existent target SHAs
+            return True
 
         if dry_run:
             print(f"🎪 [DRY-RUN] Would atomically claim PR for {action}")

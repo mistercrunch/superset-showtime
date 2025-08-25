@@ -670,6 +670,28 @@ class AWSInterface:
             print(f"❌ Failed to find expired services: {e}")
             return []
 
+    def find_showtime_services(self) -> List[str]:
+        """Find all ECS services managed by showtime (pr-* pattern)"""
+        try:
+            # List all services in cluster
+            response = self.ecs_client.list_services(cluster=self.cluster)
+            
+            if not response.get("serviceArns"):
+                return []
+            
+            # Extract service names and filter for showtime pattern
+            showtime_services = []
+            for service_arn in response["serviceArns"]:
+                service_name = service_arn.split("/")[-1]  # Extract name from ARN
+                if service_name.startswith("pr-") and "-service" in service_name:
+                    showtime_services.append(service_name)
+            
+            return sorted(showtime_services)
+            
+        except Exception as e:
+            print(f"❌ Failed to find showtime services: {e}")
+            return []
+
     def _find_pr_services(self, pr_number: int) -> List[Dict[str, Any]]:
         """Find all ECS services for a specific PR"""
         try:
