@@ -282,3 +282,36 @@ def test_status_label_identification_edge_cases():
     # Should not match other SHAs or malformed labels
     assert "🎪 def456a 🚦 running" not in sha_status_labels
     assert "🎪 abc123f🚦building" not in sha_status_labels
+
+
+@patch('showtime.core.pull_request.get_github')
+def test_atomic_claim_actually_creates_labels(mock_get_github):
+    """Test that atomic claim ACTUALLY creates labels, not just claims success"""
+    mock_github = Mock()
+    mock_github.get_labels.return_value = ["🎪 ⚡ showtime-trigger-start", "bug"]
+    mock_get_github.return_value = mock_github
+    
+    pr = PullRequest(1234, ["🎪 ⚡ showtime-trigger-start", "bug"])
+    
+    # Mock show creation
+    with patch.object(pr, '_create_new_show') as mock_create:
+        mock_show = Show(pr_number=1234, sha="abc123f", status="building")
+        mock_create.return_value = mock_show
+        
+        result = pr._atomic_claim("abc123f", "create_environment", dry_run=False)
+        
+        assert result is True
+        
+        # The CRITICAL assertions - verify actual label operations happened
+        mock_github.remove_label.assert_called()  # Should remove triggers
+        mock_github.add_label.assert_called()     # Should add building labels
+        
+        # Verify trigger was removed
+        trigger_removes = [call for call in mock_github.remove_label.call_args_list 
+                          if "showtime-trigger-start" in str(call)]
+        assert len(trigger_removes) > 0, "Trigger label should be removed"
+        
+        # Verify building labels were added
+        building_adds = [call for call in mock_github.add_label.call_args_list 
+                        if "🚦 building" in str(call)]
+        assert len(building_adds) > 0, "Building status label should be added"

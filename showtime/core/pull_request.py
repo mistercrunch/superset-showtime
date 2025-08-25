@@ -395,6 +395,9 @@ class PullRequest:
 
     def _determine_action(self, target_sha: str) -> str:
         """Determine what sync action is needed based on target SHA state"""
+        # CRITICAL: Get fresh labels before any decisions
+        self.refresh_labels()
+        
         target_sha_short = target_sha[:7]  # Ensure we're working with short SHA
         
         # Get the specific show for the target SHA
@@ -435,20 +438,20 @@ class PullRequest:
 
     def _atomic_claim(self, target_sha: str, action: str, dry_run: bool = False) -> bool:
         """Atomically claim this PR for the current job based on target SHA state"""
+        # CRITICAL: Get fresh labels before any decisions
+        self.refresh_labels()
+        
         target_sha_short = target_sha[:7]
         target_show = self.get_show_by_sha(target_sha_short)
         
-        # 1. Validate current state allows this action for target SHA
+        # 1. Validate current state allows this action for target SHA  
         if action in ["create_environment", "rolling_update", "auto_sync"]:
             if target_show and target_show.status in [
                 "building",
                 "built", 
-                "deploying",
+                "deploying", 
             ]:
-                return False  # Target SHA already in progress
-            
-            # Allow actions on failed, running, or non-existent target SHAs
-            return True
+                return False  # Target SHA already in progress - ONLY conflict case returns
 
         if dry_run:
             print(f"🎪 [DRY-RUN] Would atomically claim PR for {action}")

@@ -106,17 +106,17 @@ def test_pullrequest_determine_action():
     pr_start = PullRequest(1234, ["🎪 ⚡ showtime-trigger-start"])
     assert pr_start._determine_action("abc123f") == "create_environment"
 
-    # Start trigger, same SHA - no action
+    # Start trigger, same SHA - force rebuild with trigger
     pr_same = PullRequest(
         1234, ["🎪 ⚡ showtime-trigger-start", "🎪 abc123f 🚦 running", "🎪 🎯 abc123f"]
     )
-    assert pr_same._determine_action("abc123f") == "no_action"
+    assert pr_same._determine_action("abc123f") == "create_environment"
 
-    # Start trigger, different SHA - rolling update
+    # Start trigger, different SHA - create new environment (SHA-specific logic)
     pr_update = PullRequest(
         1234, ["🎪 ⚡ showtime-trigger-start", "🎪 abc123f 🚦 running", "🎪 🎯 abc123f"]
     )
-    assert pr_update._determine_action("def456a") == "rolling_update"
+    assert pr_update._determine_action("def456a") == "create_environment"
 
     # Stop trigger - destroy
     pr_stop = PullRequest(
@@ -124,9 +124,9 @@ def test_pullrequest_determine_action():
     )
     assert pr_stop._determine_action("def456a") == "destroy_environment"
 
-    # No triggers, but environment needs update - auto sync
+    # No triggers, but different SHA - create new environment (SHA-specific)
     pr_auto = PullRequest(1234, ["🎪 abc123f 🚦 running", "🎪 🎯 abc123f"])
-    assert pr_auto._determine_action("def456a") == "auto_sync"
+    assert pr_auto._determine_action("def456a") == "create_environment"
     
     # Failed environment, no triggers - create new (retry logic)
     pr_failed = PullRequest(1234, ["🎪 abc123f 🚦 failed", "🎪 🎯 abc123f"])
