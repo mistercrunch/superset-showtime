@@ -16,7 +16,8 @@ except ImportError:
 
 
 # Hard-coded required SHA - update this when needed
-REQUIRED_SHA = "277f03c2075a74fbafb55531054fb5083debe5cc"  # Placeholder SHA for testing
+# https://github.com/apache/superset/commit/47414e18d4c2980d0cc4718b3e704845f7dfd356
+REQUIRED_SHA = "47414e18d4c2980d0cc4718b3e704845f7dfd356"
 
 
 class GitValidationError(Exception):
@@ -49,6 +50,7 @@ def is_git_repository(path: str = ".") -> bool:
 def validate_required_sha(required_sha: Optional[str] = None) -> Tuple[bool, Optional[str]]:
     """
     Validate that the required SHA exists in the current Git repository.
+    Tries to fetch the SHA from origin if validation fails in a shallow clone.
 
     Args:
         required_sha: SHA to validate (default: REQUIRED_SHA constant)
@@ -68,23 +70,60 @@ def validate_required_sha(required_sha: Optional[str] = None) -> Tuple[bool, Opt
     try:
         repo = Repo(".")
 
-        # Search for SHA in git log (has to work in shallow clones where merge_base fails)
+        # First attempt: Search for SHA in git log (has to work in shallow clones where merge_base fails)
+        is_valid, error = _validate_sha_in_log(repo, sha_to_check)
+        if is_valid:
+            return True, None
+
+        # If validation failed, check if we're in a shallow clone and try fetching
         try:
-            log_output = repo.git.log("--oneline", "--all")
-            if sha_to_check in log_output or sha_to_check[:7] in log_output:
-                return True, None
+            is_shallow = repo.git.rev_parse("--is-shallow-repository") == "true"
+            if is_shallow:
+                try:
+                    print(f"🌊 Shallow clone detected, attempting to fetch {sha_to_check[:7]}...")
+                    repo.git.fetch("origin", sha_to_check)
+
+                    # Retry validation after fetch
+                    is_valid_after_fetch, error_after_fetch = _validate_sha_in_log(
+                        repo, sha_to_check
+                    )
+                    if is_valid_after_fetch:
+                        print(f"✅ Successfully fetched and validated {sha_to_check[:7]}")
+                        return True, None
+                    else:
+                        return False, error_after_fetch
+
+                except Exception as fetch_error:
+                    return False, (
+                        f"Required commit {sha_to_check} not found in shallow clone. "
+                        f"Failed to fetch from origin: {fetch_error}"
+                    )
             else:
-                return False, (
-                    f"Required commit {sha_to_check} not found in Git history. "
-                    f"Please update to a branch that includes this commit."
-                )
-        except Exception as e:
-            return False, f"Git log search failed: {e}"
+                return False, error
+
+        except Exception:
+            # If shallow check fails, return original error
+            return False, error
 
     except InvalidGitRepositoryError:
         return False, "Current directory is not a Git repository"
     except Exception as e:
         return False, f"Git validation error: {e}"
+
+
+def _validate_sha_in_log(repo: "Repo", sha_to_check: str) -> Tuple[bool, Optional[str]]:
+    """Helper function to validate SHA exists in git log output."""
+    try:
+        log_output = repo.git.log("--oneline", "--all")
+        if sha_to_check in log_output or sha_to_check[:7] in log_output:
+            return True, None
+        else:
+            return False, (
+                f"Required commit {sha_to_check} not found in Git history. "
+                f"Please update to a branch that includes this commit."
+            )
+    except Exception as e:
+        return False, f"Git log search failed: {e}"
 
 
 def get_validation_error_message(required_sha: Optional[str] = None) -> str:
