@@ -98,9 +98,9 @@ def test_pullrequest_get_show_by_sha():
 
 def test_pullrequest_determine_action():
     """Test action determination logic"""
-    # No environment, no triggers - no action
+    # No environment, no triggers - create environment (for CLI start)
     pr = PullRequest(1234, ["bug", "enhancement"])
-    assert pr._determine_action("abc123f") == "no_action"
+    assert pr._determine_action("abc123f") == "create_environment"
 
     # Start trigger, no environment - create
     pr_start = PullRequest(1234, ["🎪 ⚡ showtime-trigger-start"])
@@ -127,6 +127,10 @@ def test_pullrequest_determine_action():
     # No triggers, but environment needs update - auto sync
     pr_auto = PullRequest(1234, ["🎪 abc123f 🚦 running", "🎪 🎯 abc123f"])
     assert pr_auto._determine_action("def456a") == "auto_sync"
+    
+    # Failed environment, no triggers - create new (retry logic)
+    pr_failed = PullRequest(1234, ["🎪 abc123f 🚦 failed", "🎪 🎯 abc123f"])
+    assert pr_failed._determine_action("abc123f") == "create_environment"
 
 
 def test_pullrequest_analyze():
@@ -442,15 +446,19 @@ def test_pullrequest_sync_create_environment(mock_get_github):
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_sync_no_action(mock_get_github):
-    """Test sync method when no action needed"""
+def test_pullrequest_sync_same_sha_no_action(mock_get_github):
+    """Test sync method when no action needed (same SHA, healthy environment)"""
     mock_github = Mock()
     mock_get_github.return_value = mock_github
 
-    # PR with no triggers, no environment
-    pr = PullRequest(1234, ["bug", "enhancement"])
+    # PR with existing healthy environment, same SHA, no triggers
+    pr = PullRequest(1234, [
+        "🎪 abc123f 🚦 running",
+        "🎪 🎯 abc123f",
+        "bug", "enhancement"
+    ])
 
-    result = pr.sync("abc123f")
+    result = pr.sync("abc123f")  # Same SHA as current
 
     assert result.success is True
     assert result.action_taken == "no_action"
@@ -621,3 +629,38 @@ def test_pullrequest_update_show_labels(mock_get_github):
         # Should add IP label and update status
         mock_github.add_label.assert_called()
         mock_github.remove_label.assert_called()
+
+
+@patch('showtime.core.pull_request.get_github')
+def test_pullrequest_update_show_labels_status_replacement(mock_get_github):
+    """Test that status updates properly remove old status labels"""
+    mock_github = Mock()
+    mock_get_github.return_value = mock_github
+    
+    # PR with multiple status labels (the bug scenario)
+    pr = PullRequest(1234, [
+        "🎪 abc123f 🚦 building",   # Old status
+        "🎪 abc123f 🚦 failed",    # Another old status  
+        "🎪 🎯 abc123f",           # Pointer
+        "🎪 abc123f 📅 2024-01-15T14-30",
+    ])
+    
+    # Show transitioning to running
+    show = Show(
+        pr_number=1234,
+        sha="abc123f",
+        status="running",  # New status
+        created_at="2024-01-15T14-30",
+    )
+    
+    with patch.object(pr, 'refresh_labels'):
+        pr._update_show_labels(show, dry_run=False)
+        
+        # Should remove BOTH old status labels
+        remove_calls = [call.args[1] for call in mock_github.remove_label.call_args_list]
+        assert "🎪 abc123f 🚦 building" in remove_calls
+        assert "🎪 abc123f 🚦 failed" in remove_calls
+        
+        # Should add new status label
+        add_calls = [call.args[1] for call in mock_github.add_label.call_args_list]
+        assert "🎪 abc123f 🚦 running" in add_calls

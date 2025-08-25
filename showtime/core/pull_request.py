@@ -214,26 +214,35 @@ class PullRequest:
 
         # 2. Atomic claim for environment changes (PR-level lock)
         if action_needed in ["create_environment", "rolling_update", "auto_sync"]:
+            print(f"🔒 Claiming environment for {action_needed}...")
             if not self._atomic_claim(target_sha, action_needed, dry_run_github):
+                print("❌ Claim failed - another job is active")
                 return SyncResult(
                     success=False,
                     action_taken="claim_failed",
                     error="Another job is already active",
                 )
+            print("✅ Environment claimed successfully")
 
         try:
             # 3. Execute action with error handling
             if action_needed == "create_environment":
                 show = self._create_new_show(target_sha)
+                print(f"🏗️ Creating environment {show.sha}...")
                 self._post_building_comment(show, dry_run_github)
 
-                # Atomic operations with state transitions
+                # Phase 1: Docker build
+                print("🐳 Building Docker image...")
                 show.build_docker(dry_run_docker)
                 show.status = "built"
+                print("✅ Docker build completed")
                 self._update_show_labels(show, dry_run_github)
 
+                # Phase 2: AWS deployment
+                print("☁️ Deploying to AWS ECS...")
                 show.deploy_aws(dry_run_aws)
                 show.status = "running"
+                print(f"✅ Deployment completed - environment running at {show.ip}:8080")
                 self._update_show_labels(show, dry_run_github)
 
                 self._post_success_comment(show, dry_run_github)
@@ -248,15 +257,21 @@ class PullRequest:
                         error="No current show for rolling update",
                     )
                 new_show = self._create_new_show(target_sha)
+                print(f"🔄 Rolling update: {old_show.sha} → {new_show.sha}")
                 self._post_rolling_start_comment(old_show, new_show, dry_run_github)
 
-                # Atomic operations with state transitions
+                # Phase 1: Docker build  
+                print("🐳 Building updated Docker image...")
                 new_show.build_docker(dry_run_docker)
                 new_show.status = "built"
+                print("✅ Docker build completed")
                 self._update_show_labels(new_show, dry_run_github)
 
+                # Phase 2: Blue-green deployment
+                print("☁️ Deploying updated environment...")
                 new_show.deploy_aws(dry_run_aws)
                 new_show.status = "running"
+                print(f"✅ Rolling update completed - new environment at {new_show.ip}:8080")
                 self._update_show_labels(new_show, dry_run_github)
 
                 self._post_rolling_success_comment(old_show, new_show, dry_run_github)
@@ -264,11 +279,15 @@ class PullRequest:
 
             elif action_needed == "destroy_environment":
                 if self.current_show:
+                    print(f"🗑️ Destroying environment {self.current_show.sha}...")
                     self.current_show.stop(dry_run_github=dry_run_github, dry_run_aws=dry_run_aws)
+                    print("☁️ AWS resources deleted")
                     self._post_cleanup_comment(self.current_show, dry_run_github)
                     # Remove all circus labels after successful stop
                     if not dry_run_github:
                         get_github().remove_circus_labels(self.pr_number)
+                        print("🏷️ GitHub labels cleaned up")
+                    print("✅ Environment destroyed")
                 return SyncResult(success=True, action_taken="destroy_environment")
 
             else:
@@ -355,10 +374,10 @@ class PullRequest:
                     return "destroy_environment"
 
         # No explicit triggers - check for auto-sync or creation
-        if self.current_show and self.current_show.needs_update(target_sha):
+        if self.current_show and self.current_show.status != "failed" and self.current_show.needs_update(target_sha):
             return "auto_sync"
-        elif not self.current_show:
-            # No environment exists - allow creation without trigger (for CLI start)
+        elif not self.current_show or self.current_show.status == "failed":
+            # No environment exists OR failed environment - allow creation without trigger (for CLI start)
             return "create_environment"
 
         return "no_action"
@@ -482,20 +501,31 @@ class PullRequest:
         return get_github().find_prs_with_shows()
 
     def _update_show_labels(self, show: Show, dry_run: bool = False) -> None:
-        """Update GitHub labels to reflect show state (differential updates only)"""
+        """Update GitHub labels to reflect show state with proper status replacement"""
         if dry_run:
             return
 
-        # Get current circus labels and desired labels
+        # First, remove any existing status labels for this SHA to ensure clean transitions
+        sha_status_labels = [
+            label for label in self.labels 
+            if label.startswith(f"🎪 {show.sha} 🚦 ")
+        ]
+        for old_status_label in sha_status_labels:
+            get_github().remove_label(self.pr_number, old_status_label)
+
+        # Now do normal differential updates
         current_labels = {label for label in self.labels if label.startswith("🎪")}
         desired_labels = set(show.to_circus_labels())
+
+        # Remove the status labels we already cleaned up from the differential
+        current_labels = current_labels - set(sha_status_labels)
 
         # Only add labels that don't exist
         labels_to_add = desired_labels - current_labels
         for label in labels_to_add:
             get_github().add_label(self.pr_number, label)
 
-        # Only remove labels that shouldn't exist
+        # Only remove labels that shouldn't exist (excluding status labels already handled)
         labels_to_remove = current_labels - desired_labels
         for label in labels_to_remove:
             get_github().remove_label(self.pr_number, label)

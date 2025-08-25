@@ -163,6 +163,9 @@ class Show:
 
         tag = f"apache/superset:pr-{self.pr_number}-{self.sha}-ci"
 
+        # Detect if running in CI environment
+        is_ci = bool(os.getenv("GITHUB_ACTIONS") or os.getenv("CI"))
+        
         # Base command
         cmd = [
             "docker",
@@ -173,10 +176,6 @@ class Show:
             "linux/amd64",
             "--target",
             "ci",
-            "--cache-from",
-            "type=registry,ref=apache/superset-cache:3.10-slim-bookworm",
-            "--cache-to",
-            "type=registry,mode=max,ref=apache/superset-cache:3.10-slim-bookworm",
             "--build-arg",
             "INCLUDE_CHROMIUM=false",
             "--build-arg",
@@ -185,6 +184,24 @@ class Show:
             tag,
             ".",
         ]
+
+        # Add caching based on environment
+        if is_ci:
+            # Full registry caching in CI (Docker driver supports it)
+            cmd.extend([
+                "--cache-from",
+                "type=registry,ref=apache/superset-cache:3.10-slim-bookworm",
+                "--cache-to", 
+                "type=registry,mode=max,ref=apache/superset-cache:3.10-slim-bookworm",
+            ])
+            print("🐳 CI environment: Using full registry caching")
+        else:
+            # Local build: cache-from only (no cache export)
+            cmd.extend([
+                "--cache-from",
+                "type=registry,ref=apache/superset-cache:3.10-slim-bookworm",
+            ])
+            print("🐳 Local environment: Using cache-from only (no export)")
 
         # Add --load only when building for native architecture or explicitly requested
         # Intel Mac/Linux can load linux/amd64, Apple Silicon cannot

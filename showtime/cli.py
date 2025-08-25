@@ -117,13 +117,23 @@ def start(
     try:
         pr = PullRequest.from_id(pr_number)
 
-        # Check if environment already exists (unless force)
-        if pr.current_show and not force:
+        # Check if working environment already exists (unless force)
+        if pr.current_show and pr.current_show.status not in ["failed"] and not force:
             p(f"🎪 [bold yellow]Environment already exists for PR #{pr_number}[/bold yellow]")
             ip_info = f" at {pr.current_show.ip}" if pr.current_show.ip else ""
-            p(f"Current: {pr.current_show.sha}{ip_info}")
+            p(f"Current: {pr.current_show.sha}{ip_info} ({pr.current_show.status})")
             p("Use 'showtime sync' to update or 'showtime stop' to clean up first")
             return
+        
+        # Handle failed environment replacement
+        if pr.current_show and pr.current_show.status == "failed":
+            p(f"🎪 [bold orange]Replacing failed environment for PR #{pr_number}[/bold orange]")
+            p(f"Failed: {pr.current_show.sha} at {pr.current_show.created_at}")
+            p("🔄 Creating new environment...")
+        elif pr.current_show:
+            p(f"🎪 [bold blue]Creating environment for PR #{pr_number}[/bold blue]")
+        else:
+            p(f"🎪 [bold green]Creating new environment for PR #{pr_number}[/bold green]")
 
         if dry_run:
             from .core.pull_request import get_github
