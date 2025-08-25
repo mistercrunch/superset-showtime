@@ -124,7 +124,7 @@ def start(
             p(f"Current: {pr.current_show.sha}{ip_info} ({pr.current_show.status})")
             p("Use 'showtime sync' to update or 'showtime stop' to clean up first")
             return
-        
+
         # Handle failed environment replacement
         if pr.current_show and pr.current_show.status == "failed":
             p(f"🎪 [bold orange]Replacing failed environment for PR #{pr_number}[/bold orange]")
@@ -332,21 +332,27 @@ def list(
 
         # Sort by PR number, then by show type (active first, then building, then orphaned)
         type_priority = {"active": 1, "building": 2, "orphaned": 3}
-        sorted_envs = sorted(filtered_envs, key=lambda e: (e["pr_number"], type_priority.get(e["show"].get("show_type", "orphaned"), 3)))
-        
+        sorted_envs = sorted(
+            filtered_envs,
+            key=lambda e: (
+                e["pr_number"],
+                type_priority.get(e["show"].get("show_type", "orphaned"), 3),
+            ),
+        )
+
         for env in sorted_envs:
             show_data = env["show"]
             pr_number = env["pr_number"]
-            
+
             # Show type with appropriate styling (using single-width chars for alignment)
             show_type = show_data.get("show_type", "orphaned")
             if show_type == "active":
                 type_display = "* active"
-            elif show_type == "building": 
+            elif show_type == "building":
                 type_display = "# building"
             else:
                 type_display = "! orphaned"
-            
+
             # Make Superset URL clickable and show full URL
             if show_data["ip"]:
                 full_url = f"http://{show_data['ip']}:8080"
@@ -371,7 +377,7 @@ def list(
                 try:
                     parts = created_display.replace("T", " ").replace("-", ":")
                     created_display = parts[-8:]  # Show just HH:MM:SS
-                except:
+                except Exception:
                     pass  # Keep original if parsing fails
 
             table.add_row(
@@ -497,6 +503,19 @@ def sync(
 ) -> None:
     """🎪 Intelligently sync PR to desired state (called by GitHub Actions)"""
     try:
+        # Validate required Git SHA unless using --check-only
+        if not check_only:
+            from .core.git_validation import (
+                get_validation_error_message,
+                should_skip_validation,
+                validate_required_sha,
+            )
+
+            if not should_skip_validation():
+                is_valid, error_msg = validate_required_sha()
+                if not is_valid:
+                    p(get_validation_error_message())
+                    raise typer.Exit(1)
         # Use singletons - no interface creation needed
         pr = PullRequest.from_id(pr_number)
 
@@ -651,67 +670,69 @@ def aws_cleanup(
     """🧹 Clean up orphaned AWS resources without GitHub labels"""
     try:
         from .core.aws import AWSInterface
-        
+
         aws = AWSInterface()
-        
+
         p("🔍 [bold blue]Scanning for orphaned AWS resources...[/bold blue]")
-        
+
         # 1. Get all GitHub PRs with circus labels
         github_services = set()
         try:
             all_pr_numbers = PullRequest.find_all_with_environments()
             p(f"📋 Found {len(all_pr_numbers)} PRs with circus labels:")
-            
+
             for pr_number in all_pr_numbers:
                 pr = PullRequest.from_id(pr_number)
-                p(f"  🎪 PR #{pr_number}: {len(pr.shows)} shows, {len(pr.circus_labels)} circus labels")
-                
+                p(
+                    f"  🎪 PR #{pr_number}: {len(pr.shows)} shows, {len(pr.circus_labels)} circus labels"
+                )
+
                 for show in pr.shows:
                     service_name = show.ecs_service_name
                     github_services.add(service_name)
                     p(f"    📝 Expected service: {service_name}")
-                    
+
                 # Show labels for debugging
                 if not pr.shows:
                     p(f"    ⚠️ No shows found, labels: {pr.circus_labels[:3]}...")  # First 3 labels
-                    
+
         except Exception as e:
             p(f"⚠️ GitHub scan failed: {e}")
             github_services = set()
-        
+
         # 2. Get all AWS ECS services matching showtime pattern
         p("\n☁️ [bold blue]Scanning AWS ECS services...[/bold blue]")
         try:
             aws_services = aws.find_showtime_services()
             p(f"🔍 Found {len(aws_services)} AWS services with pr-* pattern")
-            
+
             for service in aws_services:
                 p(f"  ☁️ AWS: {service}")
         except Exception as e:
             p(f"❌ AWS scan failed: {e}")
             return
-            
+
         # 3. Find orphaned services
         orphaned = [service for service in aws_services if service not in github_services]
-        
+
         if not orphaned:
             p("\n✅ [bold green]No orphaned AWS resources found![/bold green]")
             return
-            
+
         p(f"\n🚨 [bold red]Found {len(orphaned)} orphaned AWS resources:[/bold red]")
         for service in orphaned:
             p(f"  💰 {service} (consuming resources)")
-            
+
         if dry_run:
             p(f"\n🎪 [bold yellow]DRY RUN[/bold yellow] - Would delete {len(orphaned)} services")
             return
-            
+
         if not force:
             confirm = typer.confirm(f"Delete {len(orphaned)} orphaned AWS services?")
             if not confirm:
                 p("🎪 Cancelled")
                 return
-                
+
         # 4. Delete orphaned resources
         deleted_count = 0
         for service in orphaned:
@@ -732,9 +753,9 @@ def aws_cleanup(
                     p(f"❌ Invalid service name format: {service}")
             except Exception as e:
                 p(f"❌ Error deleting {service}: {e}")
-                
+
         p(f"\n🎪 ✅ Cleanup complete: deleted {deleted_count}/{len(orphaned)} services")
-        
+
     except Exception as e:
         p(f"❌ AWS cleanup failed: {e}")
 
