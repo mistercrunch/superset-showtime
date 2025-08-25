@@ -274,12 +274,13 @@ class PullRequest:
             else:
                 return SyncResult(success=True, action_taken="no_action")
 
-        except Exception:
-            # Transaction failed - set failed state and re-raise
+        except Exception as e:
+            # Transaction failed - set failed state and update labels
             if "show" in locals():
                 show.status = "failed"
-                # TODO: Post failure comment and update labels
-            raise
+                self._update_show_labels(show, dry_run_github)
+                # TODO: Post failure comment
+            return SyncResult(success=False, action_taken="failed", error=str(e))
 
     def start_environment(self, sha: Optional[str] = None, **kwargs: Any) -> SyncResult:
         """Start a new environment (CLI start command logic)"""
@@ -353,9 +354,12 @@ class PullRequest:
                 elif "showtime-trigger-stop" in trigger:
                     return "destroy_environment"
 
-        # No explicit triggers - check for auto-sync
+        # No explicit triggers - check for auto-sync or creation
         if self.current_show and self.current_show.needs_update(target_sha):
             return "auto_sync"
+        elif not self.current_show:
+            # No environment exists - allow creation without trigger (for CLI start)
+            return "create_environment"
 
         return "no_action"
 
