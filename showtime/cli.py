@@ -330,21 +330,36 @@ def _build_docker_image(pr_number: int, sha: str, dry_run: bool = False) -> bool
 
     try:
         console.print(f"🎪 Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)  # 30 min timeout
+        console.print("🎪 Streaming Docker build output...")
 
-        if result.returncode == 0:
+        # Stream output in real-time for better user experience
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            universal_newlines=True,
+        )
+
+        # Stream output line by line
+        for line in process.stdout:
+            console.print(f"🐳 {line.rstrip()}")
+
+        # Wait for completion with timeout
+        try:
+            return_code = process.wait(timeout=3600)  # 60 min timeout
+        except subprocess.TimeoutExpired:
+            process.kill()
+            console.print("🎪 ❌ Docker build timed out after 60 minutes")
+            return False
+
+        if return_code == 0:
             console.print(f"🎪 ✅ Docker build succeeded: {tag}")
             return True
         else:
-            console.print("🎪 ❌ Docker build failed:")
-            console.print(f"Exit code: {result.returncode}")
-            console.print(f"STDOUT: {result.stdout}")
-            console.print(f"STDERR: {result.stderr}")
+            console.print(f"🎪 ❌ Docker build failed with exit code: {return_code}")
             return False
-
-    except subprocess.TimeoutExpired:
-        console.print("🎪 ❌ Docker build timed out after 30 minutes")
-        return False
     except Exception as e:
         console.print(f"🎪 ❌ Docker build error: {e}")
         return False
