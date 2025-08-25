@@ -648,9 +648,7 @@ class PullRequest:
         Returns:
             Number of environments stopped
         """
-        # CRITICAL: Refresh to get current shows including newly created one
-        self.refresh_labels()
-        
+        # Note: Labels should be fresh from recent _update_show_labels() call
         stopped_count = 0
         
         for show in self.shows:
@@ -659,11 +657,16 @@ class PullRequest:
                 try:
                     show.stop(dry_run_github=dry_run_github, dry_run_aws=dry_run_aws)
                     
-                    # Remove labels for this old environment
+                    # Remove ONLY existing labels for this old environment (not theoretical ones)
                     if not dry_run_github:
-                        old_labels = show.to_circus_labels()
-                        print(f"🏷️ Removing labels for {show.sha}: {len(old_labels)} labels")
-                        for label in old_labels:
+                        existing_labels = [
+                            label for label in self.labels 
+                            if label.startswith(f"🎪 {show.sha} ") or 
+                               label == f"🎪 🎯 {show.sha}" or 
+                               label == f"🎪 🏗️ {show.sha}"
+                        ]
+                        print(f"🏷️ Removing existing labels for {show.sha}: {existing_labels}")
+                        for label in existing_labels:
                             try:
                                 get_github().remove_label(self.pr_number, label)
                             except Exception as e:
