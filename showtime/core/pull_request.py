@@ -648,6 +648,9 @@ class PullRequest:
         Returns:
             Number of environments stopped
         """
+        # CRITICAL: Refresh to get current shows including newly created one
+        self.refresh_labels()
+        
         stopped_count = 0
         
         for show in self.shows:
