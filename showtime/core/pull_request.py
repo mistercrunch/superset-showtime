@@ -246,6 +246,9 @@ class PullRequest:
                 print(f"✅ Deployment completed - environment running at {show.ip}:8080")
                 self._update_show_labels(show, dry_run_github)
                 
+                # Blue-green cleanup: stop all other environments for this PR
+                cleaned_count = self.stop_previous_environments(show.sha, dry_run_github, dry_run_aws)
+                
                 # Show AWS console URLs for monitoring
                 self._show_service_urls(show)
 
@@ -277,6 +280,9 @@ class PullRequest:
                 new_show.status = "running"
                 print(f"✅ Rolling update completed - new environment at {new_show.ip}:8080")
                 self._update_show_labels(new_show, dry_run_github)
+                
+                # Blue-green cleanup: stop all other environments for this PR
+                cleaned_count = self.stop_previous_environments(new_show.sha, dry_run_github, dry_run_aws)
                 
                 # Show AWS console URLs for monitoring
                 self._show_service_urls(new_show)
@@ -580,6 +586,17 @@ class PullRequest:
         for old_status_label in sha_status_labels:
             get_github().remove_label(self.pr_number, old_status_label)
 
+        # For running environments, ensure only ONE active pointer exists
+        if show.status == "running":
+            # Remove ALL existing active pointers (there should only be one)
+            existing_active_pointers = [
+                label for label in self.labels 
+                if label.startswith("🎪 🎯 ")
+            ]
+            for old_pointer in existing_active_pointers:
+                print(f"🎯 Removing old active pointer: {old_pointer}")
+                get_github().remove_label(self.pr_number, old_pointer)
+
         # Now do normal differential updates - only for this SHA
         current_sha_labels = {
             label for label in self.labels 
@@ -616,3 +633,48 @@ class PullRequest:
         print(f"📝 Logs: {urls['logs']}")
         print(f"📊 Service: {urls['service']}")
         print("")
+
+    def stop_previous_environments(self, keep_sha: str, dry_run_github: bool = False, dry_run_aws: bool = False) -> int:
+        """Stop all environments except the specified SHA (blue-green cleanup)
+        
+        Args:
+            keep_sha: SHA of environment to keep running
+            dry_run_github: Skip GitHub label operations  
+            dry_run_aws: Skip AWS operations
+            
+        Returns:
+            Number of environments stopped
+        """
+        stopped_count = 0
+        
+        for show in self.shows:
+            if show.sha != keep_sha:
+                print(f"🧹 Cleaning up old environment: {show.sha} ({show.status})")
+                try:
+                    show.stop(dry_run_github=dry_run_github, dry_run_aws=dry_run_aws)
+                    
+                    # Remove labels for this old environment
+                    if not dry_run_github:
+                        old_labels = show.to_circus_labels()
+                        print(f"🏷️ Removing labels for {show.sha}: {len(old_labels)} labels")
+                        for label in old_labels:
+                            try:
+                                get_github().remove_label(self.pr_number, label)
+                            except Exception as e:
+                                print(f"⚠️ Failed to remove label {label}: {e}")
+                    
+                    stopped_count += 1
+                    print(f"✅ Stopped environment {show.sha}")
+                    
+                except Exception as e:
+                    print(f"❌ Failed to stop environment {show.sha}: {e}")
+                    
+        if stopped_count > 0:
+            print(f"🧹 Blue-green cleanup: stopped {stopped_count} old environments")
+            # Refresh labels after cleanup
+            if not dry_run_github:
+                self.refresh_labels()
+        else:
+            print("ℹ️ No old environments to clean up")
+            
+        return stopped_count
