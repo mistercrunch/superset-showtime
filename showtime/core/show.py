@@ -166,10 +166,10 @@ class Show:
         # Detect if running in CI environment
         is_ci = bool(os.getenv("GITHUB_ACTIONS") or os.getenv("CI"))
         
-        # Base command
+        # Build command without final path
         cmd = [
             "docker",
-            "buildx",
+            "buildx", 
             "build",
             "--push",
             "--platform",
@@ -182,7 +182,6 @@ class Show:
             "LOAD_EXAMPLES_DUCKDB=true",
             "-t",
             tag,
-            ".",
         ]
 
         # Add caching based on environment
@@ -209,12 +208,16 @@ class Show:
         force_load = os.getenv("DOCKER_LOAD", "false").lower() == "true"
         
         if native_x86 or force_load:
-            cmd.insert(-1, "--load")  # Insert before the "." argument
+            cmd.append("--load")
             print("🐳 Will load image to local Docker daemon (native x86_64 platform)")
         else:
             print("🐳 Cross-platform build - pushing to registry only (no local load)")
 
+        # Add build context path last
+        cmd.append(".")
+
         print(f"🐳 Building Docker image: {tag}")
+        print(f"🐳 Command: {' '.join(cmd)}")
 
         # Stream output in real-time
         process = subprocess.Popen(
