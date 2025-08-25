@@ -161,12 +161,12 @@ class Show:
 
         tag = f"apache/superset:pr-{self.pr_number}-{self.sha}-ci"
 
+        # Build for Linux (ECR) - don't use --load with cross-platform
         cmd = [
             "docker",
             "buildx",
             "build",
             "--push",
-            "--load",
             "--platform",
             "linux/amd64",
             "--target",
