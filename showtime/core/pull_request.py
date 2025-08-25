@@ -397,11 +397,14 @@ class PullRequest:
         if action in ["create_environment", "rolling_update", "auto_sync"]:
             if self.current_show and self.current_show.status in [
                 "building",
-                "built",
+                "built", 
                 "deploying",
-                "running",
             ]:
                 return False  # Another job active
+            
+            # For rolling updates, running environments are OK to update
+            if action in ["rolling_update", "auto_sync"] and self.current_show and self.current_show.status == "running":
+                return True  # Allow rolling updates on running environments
 
         if dry_run:
             print(f"🎪 [DRY-RUN] Would atomically claim PR for {action}")
