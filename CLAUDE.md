@@ -127,6 +127,12 @@ The `PullRequest.sync()` method implements an atomic claim pattern:
 - `GITHUB_ORG` - Default: apache
 - `GITHUB_REPO` - Default: superset
 
+**Superset Configuration (via ECS task definition):**
+- `SERVER_WORKER_AMOUNT` - Gunicorn worker processes (default: 1)
+- `SERVER_THREADS_AMOUNT` - Threads per worker (default: 20)
+
+See `showtime/data/ecs-task-definition.json` for complete container environment configuration.
+
 ## GitHub Actions Integration
 
 The tool is designed to be called from GitHub Actions workflows:

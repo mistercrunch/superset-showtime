@@ -43,6 +43,14 @@
                 {
                     "name": "PYTHONUNBUFFERED",
                     "value": "1"
+                },
+                {
+                    "name": "SERVER_WORKER_AMOUNT",
+                    "value": "4"
+                },
+                {
+                    "name": "SERVER_THREADS_AMOUNT",
+                    "value": "1"
                 }
             ],
             "mountPoints": [],
