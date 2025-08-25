@@ -51,4 +51,4 @@ publish: ## Publish to PyPI (use with caution)
 	uvx twine upload dist/*
 
 circus: ## Quick test of circus emoji parsing
-	python -c "from showtime.core.circus import parse_circus_labels; print(parse_circus_labels(['🎪 🚦 running', '🎪 🎯 abc123f']))"
+	python -c "from showtime.core.show import Show; labels=['🎪 abc123f 🚦 running', '🎪 🎯 abc123f']; show=Show.from_circus_labels(1234, labels, 'abc123f'); print(f'Status: {show.status}, SHA: {show.sha}')"

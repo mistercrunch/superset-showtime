@@ -92,11 +92,11 @@ showtime labels                 # Complete label reference
 
 **Testing/development:**
 ```bash
-showtime start 1234 --dry-run-aws      # Test without AWS costs
-showtime test-lifecycle 1234           # Full workflow simulation
+showtime sync 1234 --dry-run-aws --dry-run-docker  # Test without costs
+showtime cleanup --dry-run --older-than 1h         # Test cleanup logic
 ```
 
-> **Dependency**: This CLI coordinates with Superset's existing GitHub Actions build infrastructure. It orchestrates environments but relies on Superset's build workflows for container creation.
+> **Architecture**: This CLI implements ACID-style atomic transactions with direct Docker integration. It handles complete environment lifecycle from Docker build to AWS deployment with race condition prevention.
 
 ## 🎪 Complete Label Reference
 
@@ -210,7 +210,14 @@ The CLI is primarily used by GitHub Actions, but available for debugging and adv
 ```bash
 pip install superset-showtime
 export GITHUB_TOKEN=your_token
-showtime --help  # See all available commands
+
+# Core commands:
+showtime sync PR_NUMBER              # Sync to desired state (main command)
+showtime start PR_NUMBER             # Create new environment
+showtime stop PR_NUMBER              # Delete environment
+showtime status PR_NUMBER            # Show current state
+showtime list                        # List all environments
+showtime cleanup --older-than 48h    # Clean up expired environments
 ```
 
 
@@ -221,11 +228,11 @@ showtime --help  # See all available commands
 
 **Test with real PRs safely:**
 ```bash
-# Test label management without AWS costs:
-showtime start YOUR_PR_NUMBER --dry-run-aws --aws-sleep 10
+# Test full workflow without costs:
+showtime sync YOUR_PR_NUMBER --dry-run-aws --dry-run-docker
 
-# Test full lifecycle:
-showtime test-lifecycle YOUR_PR_NUMBER --real-github
+# Test cleanup logic:
+showtime cleanup --dry-run --older-than 24h
 ```
 
 ### Development Setup

@@ -7,7 +7,7 @@ Centralized PR comment functions with type hints and clean formatting.
 import os
 from typing import Dict, List, Optional
 
-from .circus import Show
+from .show import Show
 
 # AWS Console URL constants
 BASE_AWS_URL = "https://us-west-2.console.aws.amazon.com/ecs/v2/clusters/superset-ci/services"
@@ -41,7 +41,7 @@ def _create_header_links(sha: str) -> Dict[str, str]:
     Returns:
         Dict with showtime_link, gha_link, commit_link
     """
-    from .circus import short_sha
+    from .show import short_sha
 
     repo_path = get_repo_path()
     return {
@@ -175,7 +175,7 @@ def rolling_start_comment(current_show: Show, new_sha: str) -> str:
         current_show: Current Show object with SHA and IP
         new_sha: New environment SHA (full SHA, will be truncated)
     """
-    from .circus import short_sha
+    from .show import short_sha
 
     links = _create_header_links(new_sha)
     header = f"🎪 {links['showtime_link']} is updating {current_show.short_sha}→{short_sha(new_sha)} on {links['gha_link']} for {links['commit_link']}"
@@ -216,7 +216,7 @@ def rolling_failure_comment(current_show: Show, new_sha: str, error: str) -> str
         new_sha: Failed new environment SHA (full SHA, will be truncated)
         error: Error message describing what went wrong
     """
-    from .circus import short_sha
+    from .show import short_sha
 
     links = _create_header_links(new_sha)
     header = f"🎪 {links['showtime_link']} failed updating to {short_sha(new_sha)} on {links['gha_link']} for {links['commit_link']}"

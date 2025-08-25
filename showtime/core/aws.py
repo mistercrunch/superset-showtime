@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import boto3
+import boto3  # type: ignore[import-untyped]
 
 
 @dataclass
@@ -36,7 +36,12 @@ class EnvironmentResult:
 class AWSInterface:
     """AWS ECS/ECR client replicating current GHA logic"""
 
-    def __init__(self, region: str = None, cluster: str = None, repository: str = None):
+    def __init__(
+        self,
+        region: Optional[str] = None,
+        cluster: Optional[str] = None,
+        repository: Optional[str] = None,
+    ):
         self.region = region or os.getenv("AWS_REGION", "us-west-2")
         self.cluster = cluster or os.getenv("ECS_CLUSTER", "superset-ci")
         self.repository = repository or os.getenv("ECR_REPOSITORY", "superset-ci")
@@ -55,24 +60,23 @@ class AWSInterface:
         pr_number: int,
         sha: str,
         github_user: str = "unknown",
-        feature_flags: List[Dict[str, str]] = None,
+        feature_flags: Optional[List[Dict[str, str]]] = None,
         image_tag_override: Optional[str] = None,
         force: bool = False,
     ) -> EnvironmentResult:
         """
-        Create ephemeral environment with blue-green deployment support
+        Create ephemeral environment (replaces any existing service with same name)
 
-        Blue-Green Steps:
-        1. Check if ECR image exists
-        2. Create Show object for consistent naming
-        3. Check for existing services (blue)
-        4. Create new service with SHA (green)
-        5. Wait for deployment stability
-        6. Get public IP and return for traffic switching
+        Steps:
+        1. Create task definition with feature flags
+        2. Delete any existing service with same name (clean slate)
+        3. Create fresh ECS service
+        4. Deploy and wait for stability
+        5. Health check and return IP
         """
         from datetime import datetime
 
-        from .circus import Show
+        from .show import Show
 
         # Create Show object for consistent AWS naming
         show = Show(
@@ -126,22 +130,21 @@ class AWSInterface:
             if not task_def_arn:
                 return EnvironmentResult(success=False, error="Failed to create task definition")
 
-            # Step 3: Blue-Green Logic - Check for existing services
-            print(f"🔍 Checking for existing services for PR #{pr_number}")
+            # Step 3: Clean slate - Delete any existing service with this exact name
+            print(f"🔍 Checking for existing service: {service_name}")
             existing_services = self._find_pr_services(pr_number)
 
-            if existing_services:
-                print(
-                    f"📊 Found {len(existing_services)} existing services - starting blue-green deployment"
-                )
-                for svc in existing_services:
-                    print(f"   🔵 Blue: {svc['service_name']} ({svc['status']})")
+            for existing_service in existing_services:
+                if existing_service["service_name"] == service_name:
+                    print(f"🗑️ Deleting existing service: {service_name}")
+                    self._delete_ecs_service(service_name)
+                    break
 
-            # Step 4: Create new green service
-            print(f"🟢 Creating green service: {service_name}")
+            # Step 4: Create fresh service
+            print(f"🆕 Creating service: {service_name}")
             success = self._create_ecs_service(service_name, pr_number, github_user, task_def_arn)
             if not success:
-                return EnvironmentResult(success=False, error="Green service creation failed")
+                return EnvironmentResult(success=False, error="Service creation failed")
 
             # Step 5: Deploy task definition to green service
             success = self._deploy_task_definition(service_name, task_def_arn)
@@ -254,7 +257,8 @@ class AWSInterface:
                 return None
 
             eni = eni_response["NetworkInterfaces"][0]
-            return eni.get("Association", {}).get("PublicIp")
+            public_ip = eni.get("Association", {}).get("PublicIp")
+            return str(public_ip) if public_ip else None
 
         except Exception:
             return None
@@ -336,7 +340,7 @@ class AWSInterface:
             task_def_arn = response["taskDefinition"]["taskDefinitionArn"]
 
             print(f"✅ Created task definition: {task_def_arn}")
-            return task_def_arn
+            return str(task_def_arn)
 
         except Exception as e:
             print(f"❌ Task definition creation failed: {e}")

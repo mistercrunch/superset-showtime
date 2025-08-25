@@ -8,8 +8,9 @@ __version__ = "0.3.3"
 __author__ = "Maxime Beauchemin"
 __email__ = "maximebeauchemin@gmail.com"
 
-from .core.circus import PullRequest, Show
 from .core.github import GitHubInterface
+from .core.pull_request import PullRequest
+from .core.show import Show
 
 __all__ = [
     "__version__",

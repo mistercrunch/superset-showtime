@@ -7,7 +7,7 @@ and circus tent emoji state synchronization.
 
 import os
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -23,7 +23,9 @@ class GitHubError(Exception):
 class GitHubInterface:
     """GitHub API client for circus tent label operations"""
 
-    def __init__(self, token: str = None, org: str = None, repo: str = None):
+    def __init__(
+        self, token: Optional[str] = None, org: Optional[str] = None, repo: Optional[str] = None
+    ):
         self.token = token or self._detect_token()
         self.org = org or os.getenv("GITHUB_ORG", "apache")
         self.repo = repo or os.getenv("GITHUB_REPO", "superset")
@@ -120,16 +122,17 @@ class GitHubInterface:
     def get_latest_commit_sha(self, pr_number: int) -> str:
         """Get the latest commit SHA for a PR"""
         pr_data = self.get_pr_data(pr_number)
-        return pr_data["head"]["sha"]
+        return str(pr_data["head"]["sha"])
 
-    def get_pr_data(self, pr_number: int) -> dict:
+    def get_pr_data(self, pr_number: int) -> Dict[str, Any]:
         """Get full PR data including description"""
         url = f"{self.base_url}/repos/{self.org}/{self.repo}/pulls/{pr_number}"
 
         with httpx.Client() as client:
             response = client.get(url, headers=self.headers)
             response.raise_for_status()
-            return response.json()
+            result: Dict[str, Any] = response.json()
+            return result
 
     def get_circus_labels(self, pr_number: int) -> List[str]:
         """Get only circus tent emoji labels for a PR"""
@@ -149,7 +152,7 @@ class GitHubInterface:
         # Search for PRs with any circus tent labels
         params = {
             "q": f"repo:{self.org}/{self.repo} is:pr 🎪",
-            "per_page": 100,
+            "per_page": "100",
         }  # Include closed PRs
 
         with httpx.Client() as client:
@@ -205,6 +208,7 @@ class GitHubInterface:
                 return False  # Label doesn't exist
             else:
                 response.raise_for_status()
+                return False  # Should never reach here
 
     def cleanup_sha_labels(self, dry_run: bool = False) -> List[str]:
         """Clean up all circus tent labels with SHA patterns from repository"""
