@@ -165,17 +165,17 @@ class Show:
 
         # Detect if running in CI environment
         is_ci = bool(os.getenv("GITHUB_ACTIONS") or os.getenv("CI"))
-        
+
         # Build command without final path
         cmd = [
             "docker",
-            "buildx", 
+            "buildx",
             "build",
             "--push",
             "--platform",
             "linux/amd64",
             "--target",
-            "dev",
+            "showtime",
             "--build-arg",
             "INCLUDE_CHROMIUM=false",
             "--build-arg",
@@ -190,7 +190,7 @@ class Show:
             cmd.extend([
                 "--cache-from",
                 "type=registry,ref=apache/superset-cache:showtime",
-                "--cache-to", 
+                "--cache-to",
                 "type=registry,mode=max,ref=apache/superset-cache:showtime",
             ])
             print("🐳 CI environment: Using full registry caching")
@@ -204,7 +204,7 @@ class Show:
 
         # Add --load only when explicitly requested for local testing
         force_load = os.getenv("DOCKER_LOAD", "false").lower() == "true"
-        
+
         if force_load:
             cmd.append("--load")
             print("🐳 Will load image to local Docker daemon (DOCKER_LOAD=true)")
