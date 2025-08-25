@@ -507,6 +507,9 @@ class PullRequest:
         if dry_run:
             return
 
+        # Refresh labels to get current state (atomic claim may have changed them)
+        self.refresh_labels()
+
         # First, remove any existing status labels for this SHA to ensure clean transitions
         sha_status_labels = [
             label for label in self.labels 
@@ -532,5 +535,5 @@ class PullRequest:
         for label in labels_to_remove:
             get_github().remove_label(self.pr_number, label)
 
-        # Refresh our label cache
+        # Final refresh to update cache with all changes
         self.refresh_labels()
