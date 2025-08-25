@@ -599,6 +599,11 @@ class PullRequest:
             for old_pointer in existing_active_pointers:
                 print(f"🎯 Removing old active pointer: {old_pointer}")
                 get_github().remove_label(self.pr_number, old_pointer)
+            
+            # CRITICAL: Refresh after removals before differential calculation
+            if existing_active_pointers:
+                print("🔄 Refreshing labels after pointer cleanup...")
+                self.refresh_labels()
 
         # Now do normal differential updates - only for this SHA
         current_sha_labels = {
