@@ -515,7 +515,6 @@ class PullRequest:
             for label in new_labels:
                 try:
                     self.add_label(label)
-                    print(f"  ✅ Added: {label}")
                 except Exception as e:
                     print(f"  ❌ Failed to add {label}: {e}")
                     raise
