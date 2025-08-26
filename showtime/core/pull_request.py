@@ -236,7 +236,7 @@ class PullRequest:
         build_needed = action_needed in ["create_environment", "rolling_update", "auto_sync"]
 
         # Determine if sync execution is needed
-        sync_needed = action_needed != "no_action"
+        sync_needed = action_needed not in ["no_action", "blocked"]
 
         return AnalysisResult(
             action_needed=action_needed,
@@ -272,7 +272,15 @@ class PullRequest:
         # 1. Determine what action is needed
         action_needed = self._determine_action(target_sha)
 
-        # 2. Atomic claim for environment changes (PR-level lock)
+        # 2. Check for blocked state (fast bailout)
+        if action_needed == "blocked":
+            return SyncResult(
+                success=False,
+                action_taken="blocked",
+                error="🔒 Showtime operations are blocked for this PR. Remove '🎪 🔒 showtime-blocked' label to re-enable.",
+            )
+
+        # 3. Atomic claim for environment changes (PR-level lock)
         if action_needed in ["create_environment", "rolling_update", "auto_sync"]:
             print(f"🔒 Claiming environment for {action_needed}...")
             if not self._atomic_claim(target_sha, action_needed, dry_run_github):
@@ -460,6 +468,10 @@ class PullRequest:
         """Determine what sync action is needed based on target SHA state"""
         # CRITICAL: Get fresh labels before any decisions
         self.refresh_labels()
+
+        # Check for blocked state first (fast bailout)
+        if "🎪 🔒 showtime-blocked" in self.labels:
+            return "blocked"
 
         target_sha_short = target_sha[:7]  # Ensure we're working with short SHA
 

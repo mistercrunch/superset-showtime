@@ -819,3 +819,44 @@ def test_pullrequest_set_active_show(mock_get_github):
     # Should add new active pointer
     add_calls = [call.args[1] for call in mock_github.add_label.call_args_list]
     assert "🎪 🎯 abc123f" in add_calls
+
+
+@patch("showtime.core.pull_request.get_github")
+def test_pullrequest_blocked_state(mock_get_github):
+    """Test that blocked state prevents all operations"""
+    mock_github = Mock()
+    mock_github.get_labels.return_value = [
+        "🎪 🔒 showtime-blocked",
+        "🎪 abc123f 🚦 running",  # Existing environment
+        "🎪 ⚡ showtime-trigger-start",  # Trigger should be ignored
+    ]
+    mock_get_github.return_value = mock_github
+
+    pr = PullRequest(1234, [])
+
+    # Test sync with blocked state
+    result = pr.sync("def456a")
+
+    # Should fail with blocked error
+    assert result.success is False
+    assert result.action_taken == "blocked"
+    assert "🔒 Showtime operations are blocked" in result.error
+    assert "showtime-blocked" in result.error
+
+    # Should not perform any operations
+    assert not mock_github.add_label.called
+    assert not mock_github.remove_label.called
+
+
+@patch("showtime.core.pull_request.get_github")
+def test_pullrequest_determine_action_blocked(mock_get_github):
+    """Test _determine_action returns 'blocked' when blocked label present"""
+    mock_github = Mock()
+    mock_github.get_labels.return_value = ["🎪 🔒 showtime-blocked", "🎪 ⚡ showtime-trigger-start"]
+    mock_get_github.return_value = mock_github
+
+    pr = PullRequest(1234, [])
+
+    action = pr._determine_action("abc123f")
+
+    assert action == "blocked"

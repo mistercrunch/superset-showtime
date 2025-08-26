@@ -13,6 +13,7 @@ EMOJI_MEANINGS = {
     "🚦": "status",  # Traffic light for environment status
     "🏗️": "building",  # Construction for building environments
     "🎯": "active",  # Target for currently active environment
+    "🔒": "blocked",  # Lock for blocking all operations
     # Metadata
     "📅": "created_at",  # Calendar for creation timestamp
     "🌐": "ip",  # Globe for IP address

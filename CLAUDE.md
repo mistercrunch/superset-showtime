@@ -84,6 +84,7 @@ The system uses GitHub labels as a distributed state machine:
 - `🎪 ⚡ showtime-trigger-start` - Create environment
 - `🎪 🛑 showtime-trigger-stop` - Destroy environment
 - `🎪 🧊 showtime-freeze` - Prevent auto-sync
+- `🎪 🔒 showtime-blocked` - Block ALL operations (maintenance mode)
 
 **State Labels (System Managed):**
 - `🎪 {sha} 🚦 {status}` - Environment status

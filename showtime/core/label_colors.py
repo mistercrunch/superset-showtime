@@ -31,6 +31,10 @@ LABEL_DEFINITIONS = {
         "color": "FFE4B5",  # Light orange
         "description": "Freeze PR - prevent auto-sync on new commits",
     },
+    "🎪 🔒 showtime-blocked": {
+        "color": "dc3545",  # Red - blocking/danger
+        "description": "Block all Showtime operations - maintenance mode",
+    },
 }
 
 # Status-specific label patterns (generated dynamically)
