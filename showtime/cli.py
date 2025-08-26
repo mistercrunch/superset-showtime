@@ -585,36 +585,6 @@ def sync(
 
 
 @app.command()
-def handle_sync(pr_number: int) -> None:
-    """🎪 Handle new commit sync (called by GitHub Actions on PR synchronize)"""
-    try:
-        pr = PullRequest.from_id(pr_number)
-
-        # Only sync if there's an active environment
-        if not pr.current_show:
-            p(f"🎪 No active environment for PR #{pr_number} - skipping sync")
-            return
-
-        # Get latest commit SHA
-        from .core.pull_request import get_github
-
-        latest_sha = get_github().get_latest_commit_sha(pr_number)
-
-        # Check if update is needed
-        if not pr.current_show.needs_update(latest_sha):
-            p(f"🎪 Environment already up to date for PR #{pr_number}")
-            return
-
-        p(f"🎪 Syncing PR #{pr_number} to commit {latest_sha[:7]}")
-
-        # TODO: Implement rolling update logic
-        p("🎪 [bold yellow]Sync logic not yet implemented[/bold yellow]")
-
-    except Exception as e:
-        p(f"🎪 [bold red]Error handling sync:[/bold red] {e}")
-
-
-@app.command()
 def setup_labels(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what labels would be created"),
 ) -> None:
