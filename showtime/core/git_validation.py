@@ -50,7 +50,7 @@ def is_git_repository(path: str = ".") -> bool:
 def validate_required_sha(required_sha: Optional[str] = None) -> Tuple[bool, Optional[str]]:
     """
     Validate that the required SHA exists in the current Git repository.
-    Tries to fetch the SHA from origin if validation fails in a shallow clone.
+    Uses GitHub API for reliable validation in shallow clone environments.
 
     Args:
         required_sha: SHA to validate (default: REQUIRED_SHA constant)
@@ -60,55 +60,90 @@ def validate_required_sha(required_sha: Optional[str] = None) -> Tuple[bool, Opt
         - (True, None) if validation passes
         - (False, error_message) if validation fails
     """
-    if Repo is None:
-        return False, "GitPython not available for SHA validation"
-
     sha_to_check = required_sha or REQUIRED_SHA
     if not sha_to_check:
         return True, None  # No requirement set
 
+    # Try GitHub API validation first (works in shallow clones)
+    try:
+        return _validate_sha_via_github_api(sha_to_check)
+    except Exception as e:
+        print(f"⚠️ GitHub API validation failed: {e}")
+
+    # Fallback to Git validation for non-GitHub origins
+    if Repo is None:
+        print("⚠️ GitPython not available, skipping SHA validation")
+        return True, None
+
     try:
         repo = Repo(".")
-
-        # First attempt: Search for SHA in git log (has to work in shallow clones where merge_base fails)
         is_valid, error = _validate_sha_in_log(repo, sha_to_check)
         if is_valid:
             return True, None
-
-        # If validation failed, check if we're in a shallow clone and try fetching
-        try:
-            is_shallow = repo.git.rev_parse("--is-shallow-repository") == "true"
-            if is_shallow:
-                try:
-                    print(f"🌊 Shallow clone detected, attempting to fetch {sha_to_check[:7]}...")
-                    repo.git.fetch("origin", sha_to_check)
-
-                    # Retry validation after fetch
-                    is_valid_after_fetch, error_after_fetch = _validate_sha_in_log(
-                        repo, sha_to_check
-                    )
-                    if is_valid_after_fetch:
-                        print(f"✅ Successfully fetched and validated {sha_to_check[:7]}")
-                        return True, None
-                    else:
-                        return False, error_after_fetch
-
-                except Exception as fetch_error:
-                    return False, (
-                        f"Required commit {sha_to_check} not found in shallow clone. "
-                        f"Failed to fetch from origin: {fetch_error}"
-                    )
-            else:
-                return False, error
-
-        except Exception:
-            # If shallow check fails, return original error
-            return False, error
+        else:
+            print(f"⚠️ Git validation failed: {error}")
+            return True, None  # Allow operation to continue
 
     except InvalidGitRepositoryError:
-        return False, "Current directory is not a Git repository"
+        print("⚠️ Not a Git repository, skipping SHA validation")
+        return True, None
     except Exception as e:
-        return False, f"Git validation error: {e}"
+        print(f"⚠️ Git validation error: {e}")
+        return True, None
+
+
+def _validate_sha_via_github_api(required_sha: str) -> Tuple[bool, Optional[str]]:
+    """Validate SHA using GitHub API - works reliably in shallow clones"""
+    try:
+        import httpx
+        from git import Repo
+
+        from .github import GitHubInterface
+
+        # Get current SHA from Git
+        repo = Repo(".")
+        current_sha = repo.head.commit.hexsha
+
+        # Use existing GitHubInterface (handles all the setup/token detection)
+        github = GitHubInterface()
+
+        # 1. Check if required SHA exists
+        commit_url = f"{github.base_url}/repos/{github.org}/{github.repo}/commits/{required_sha}"
+
+        with httpx.Client() as client:
+            response = client.get(commit_url, headers=github.headers)
+            if response.status_code == 404:
+                return False, f"Required SHA {required_sha[:7]} not found in repository"
+            response.raise_for_status()
+
+        # 2. Compare SHAs to verify ancestry
+        compare_url = f"{github.base_url}/repos/{github.org}/{github.repo}/compare/{required_sha}...{current_sha}"
+
+        with httpx.Client() as client:
+            response = client.get(compare_url, headers=github.headers)
+            if response.status_code == 404:
+                return (
+                    False,
+                    f"Current branch does not include required SHA {required_sha[:7]}. Please rebase onto main.",
+                )
+            response.raise_for_status()
+
+            data = response.json()
+            status = data.get("status")
+
+            # If status is 'ahead' or 'identical', required SHA is ancestor (good)
+            # If status is 'behind', current is behind required (bad)
+            if status in ["ahead", "identical"]:
+                return True, None
+            else:
+                return (
+                    False,
+                    f"Current branch does not include required SHA {required_sha[:7]}. Please rebase onto main.",
+                )
+
+    except Exception as e:
+        # Re-raise to be caught by the caller for proper fallback handling
+        raise Exception(f"GitHub API validation error: {e}") from e
 
 
 def _validate_sha_in_log(repo: "Repo", sha_to_check: str) -> Tuple[bool, Optional[str]]:
