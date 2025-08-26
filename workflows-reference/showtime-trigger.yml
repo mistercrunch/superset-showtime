@@ -3,7 +3,7 @@ name: 🎪 Superset Showtime
 # Ultra-simple: just sync on any PR state change
 on:
   pull_request_target:
-    types: [labeled, synchronize, closed]
+    types: [labeled, unlabeled, synchronize, closed]
 
   # Manual testing
   workflow_dispatch:
