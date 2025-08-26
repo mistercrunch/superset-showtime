@@ -264,6 +264,16 @@ class GitHubInterface:
 
             print(f"🗑️ Found {len(orphaned_labels)} truly orphaned labels")
 
+            # Debug: Show some examples if in dry run
+            if dry_run and orphaned_labels:
+                print("🔍 Examples of orphaned labels:")
+                for label in list(orphaned_labels)[:5]:
+                    print(f"  • {label}")
+            if dry_run and used_labels:
+                print("🔍 Examples of used labels:")
+                for label in list(used_labels)[:5]:
+                    print(f"  • {label}")
+
             if not dry_run and orphaned_labels:
                 deleted_labels = []
                 for label in orphaned_labels:
