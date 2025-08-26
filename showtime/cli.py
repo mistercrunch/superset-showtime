@@ -633,106 +633,9 @@ def setup_labels(
 
 
 @app.command()
-def aws_cleanup(
-    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be cleaned"),
-    force: bool = typer.Option(False, "--force", help="Delete all showtime AWS resources"),
-) -> None:
-    """🧹 Clean up orphaned AWS resources without GitHub labels"""
-    try:
-        from .core.aws import AWSInterface
-
-        aws = AWSInterface()
-
-        p("🔍 [bold blue]Scanning for orphaned AWS resources...[/bold blue]")
-
-        # 1. Get all GitHub PRs with circus labels
-        github_services = set()
-        try:
-            all_pr_numbers = PullRequest.find_all_with_environments()
-            p(f"📋 Found {len(all_pr_numbers)} PRs with circus labels:")
-
-            for pr_number in all_pr_numbers:
-                pr = PullRequest.from_id(pr_number)
-                p(
-                    f"  🎪 PR #{pr_number}: {len(pr.shows)} shows, {len(pr.circus_labels)} circus labels"
-                )
-
-                for show in pr.shows:
-                    service_name = show.ecs_service_name
-                    github_services.add(service_name)
-                    p(f"    📝 Expected service: {service_name}")
-
-                # Show labels for debugging
-                if not pr.shows:
-                    p(f"    ⚠️ No shows found, labels: {pr.circus_labels[:3]}...")  # First 3 labels
-
-        except Exception as e:
-            p(f"⚠️ GitHub scan failed: {e}")
-            github_services = set()
-
-        # 2. Get all AWS ECS services matching showtime pattern
-        p("\n☁️ [bold blue]Scanning AWS ECS services...[/bold blue]")
-        try:
-            aws_services = aws.find_showtime_services()
-            p(f"🔍 Found {len(aws_services)} AWS services with pr-* pattern")
-
-            for service in aws_services:
-                p(f"  ☁️ AWS: {service}")
-        except Exception as e:
-            p(f"❌ AWS scan failed: {e}")
-            return
-
-        # 3. Find orphaned services
-        orphaned = [service for service in aws_services if service not in github_services]
-
-        if not orphaned:
-            p("\n✅ [bold green]No orphaned AWS resources found![/bold green]")
-            return
-
-        p(f"\n🚨 [bold red]Found {len(orphaned)} orphaned AWS resources:[/bold red]")
-        for service in orphaned:
-            p(f"  💰 {service} (consuming resources)")
-
-        if dry_run:
-            p(f"\n🎪 [bold yellow]DRY RUN[/bold yellow] - Would delete {len(orphaned)} services")
-            return
-
-        if not force:
-            confirm = typer.confirm(f"Delete {len(orphaned)} orphaned AWS services?")
-            if not confirm:
-                p("🎪 Cancelled")
-                return
-
-        # 4. Delete orphaned resources
-        deleted_count = 0
-        for service in orphaned:
-            p(f"🗑️ Deleting {service}...")
-            try:
-                # Extract PR number for delete_environment call
-                pr_match = service.replace("pr-", "").replace("-service", "")
-                parts = pr_match.split("-")
-                if len(parts) >= 2:
-                    pr_number = int(parts[0])
-                    success = aws.delete_environment(service, pr_number)
-                    if success:
-                        p(f"✅ Deleted {service}")
-                        deleted_count += 1
-                    else:
-                        p(f"❌ Failed to delete {service}")
-                else:
-                    p(f"❌ Invalid service name format: {service}")
-            except Exception as e:
-                p(f"❌ Error deleting {service}: {e}")
-
-        p(f"\n🎪 ✅ Cleanup complete: deleted {deleted_count}/{len(orphaned)} services")
-
-    except Exception as e:
-        p(f"❌ AWS cleanup failed: {e}")
-
-
-@app.command()
 def cleanup(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be cleaned"),
+    force: bool = typer.Option(False, "--force", help="Skip interactive prompts"),
     older_than: str = typer.Option(
         "48h", "--older-than", help="Clean environments older than this (ignored if --respect-ttl)"
     ),
@@ -746,6 +649,11 @@ def cleanup(
         True,
         "--cleanup-labels/--no-cleanup-labels",
         help="Also cleanup SHA-based label definitions from repository",
+    ),
+    cleanup_aws_orphans: bool = typer.Option(
+        True,
+        "--cleanup-aws-orphans/--no-cleanup-aws-orphans",
+        help="Also cleanup orphaned AWS resources",
     ),
 ) -> None:
     """🎪 Clean up orphaned or expired environments and labels"""
@@ -780,6 +688,106 @@ def cleanup(
             p(f"🎪 ✅ Cleaned up {cleaned_count} expired environments")
         else:
             p("🎪 No expired environments found")
+
+        # Phase 2: AWS orphan cleanup
+        aws_cleaned_count = 0
+        if cleanup_aws_orphans:
+            from .core.aws import AWSInterface
+
+            p("\n☁️ [bold blue]Scanning for orphaned AWS resources...[/bold blue]")
+            aws = AWSInterface()
+
+            try:
+                # Get expected services from GitHub
+                github_services = set()
+                for pr_number in pr_numbers:
+                    pr = PullRequest.from_id(pr_number)
+                    for show in pr.shows:
+                        github_services.add(show.ecs_service_name)
+
+                # Find AWS orphans
+                aws_services = aws.list_circus_environments()
+                aws_orphans = [
+                    svc for svc in aws_services if svc.get("service_name") not in github_services
+                ]
+
+                if aws_orphans:
+                    p(f"☁️ Found {len(aws_orphans)} orphaned AWS resources:")
+                    for orphan in aws_orphans[:3]:
+                        p(f"  • {orphan['service_name']}")
+                    if len(aws_orphans) > 3:
+                        p(f"  ... and {len(aws_orphans) - 3} more")
+
+                    if not force and not dry_run:
+                        if typer.confirm(f"Delete {len(aws_orphans)} orphaned AWS resources?"):
+                            # Clean up AWS orphans
+                            for orphan in aws_orphans:
+                                if not dry_run:
+                                    aws.delete_service(orphan["service_name"])
+                                aws_cleaned_count += 1
+                        else:
+                            p("❌ Skipping AWS orphan cleanup")
+                    elif force or dry_run:
+                        aws_cleaned_count = len(aws_orphans)
+                        if not dry_run:
+                            for orphan in aws_orphans:
+                                aws.delete_service(orphan["service_name"])
+
+                if aws_cleaned_count > 0:
+                    p(f"☁️ ✅ Cleaned up {aws_cleaned_count} orphaned AWS resources")
+                else:
+                    p("☁️ No orphaned AWS resources found")
+
+            except Exception as e:
+                p(f"⚠️ AWS orphan scan failed: {e}")
+
+        # Phase 3: Repository label cleanup
+        label_cleaned_count = 0
+        if cleanup_labels:
+            from .core.pull_request import get_github
+
+            p("\n🏷️ [bold blue]Scanning for orphaned repository labels...[/bold blue]")
+            github = get_github()
+
+            try:
+                orphaned_labels = github.cleanup_sha_labels(dry_run=True)  # Preview
+
+                if orphaned_labels:
+                    p(f"🏷️ Found {len(orphaned_labels)} orphaned repository labels:")
+                    for label in orphaned_labels[:3]:
+                        p(f"  • {label}")
+                    if len(orphaned_labels) > 3:
+                        p(f"  ... and {len(orphaned_labels) - 3} more")
+
+                    if not force and not dry_run:
+                        if typer.confirm(
+                            f"Delete {len(orphaned_labels)} orphaned labels from repository?"
+                        ):
+                            deleted_labels = github.cleanup_sha_labels(dry_run=False)
+                            label_cleaned_count = len(deleted_labels)
+                        else:
+                            p("❌ Skipping repository label cleanup")
+                    elif force or dry_run:
+                        label_cleaned_count = len(orphaned_labels)
+                        if not dry_run:
+                            github.cleanup_sha_labels(dry_run=False)
+
+                if label_cleaned_count > 0:
+                    p(f"🏷️ ✅ Cleaned up {label_cleaned_count} orphaned repository labels")
+                else:
+                    p("🏷️ No orphaned repository labels found")
+
+            except Exception as e:
+                p(f"⚠️ Repository label scan failed: {e}")
+
+        # Final summary
+        total_cleaned = cleaned_count + aws_cleaned_count + label_cleaned_count
+        if total_cleaned > 0:
+            p(
+                f"\n🎉 [bold green]Total cleanup: {cleaned_count} environments + {aws_cleaned_count} AWS orphans + {label_cleaned_count} labels[/bold green]"
+            )
+        else:
+            p("\n✨ [bold green]No cleanup needed - everything is clean![/bold green]")
 
     except Exception as e:
         p(f"❌ Cleanup failed: {e}")
