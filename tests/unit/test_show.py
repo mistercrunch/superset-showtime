@@ -290,3 +290,36 @@ def test_show_to_circus_labels_auto_timestamp():
         # Should auto-generate timestamp
         assert show.created_at == "2024-01-15T14-30"
         assert any("📅 2024-01-15T14-30" in label for label in labels)
+
+
+def test_show_to_circus_labels_no_active_pointer():
+    """Test that to_circus_labels() does not include active pointer"""
+    show = Show(
+        pr_number=1234, sha="abc123f", status="running", ip="1.2.3.4", requested_by="testuser"
+    )
+
+    labels = show.to_circus_labels()
+
+    # Should include status, timestamp, TTL, IP, requester
+    assert any("🎪 abc123f 🚦 running" in label for label in labels)
+    assert any("🎪 abc123f 📅" in label for label in labels)
+    assert any("🎪 abc123f ⌛ 24h" in label for label in labels)
+    assert any("🎪 abc123f 🌐 1.2.3.4:8080" in label for label in labels)
+    assert any("🎪 abc123f 🤡 testuser" in label for label in labels)
+
+    # Should NOT include active pointer
+    assert not any("🎪 🎯" in label for label in labels)
+
+
+def test_show_to_circus_labels_building_status():
+    """Test to_circus_labels() for building status"""
+    show = Show(pr_number=1234, sha="def456a", status="building")
+
+    labels = show.to_circus_labels()
+
+    # Should include building status
+    assert any("🎪 def456a 🚦 building" in label for label in labels)
+
+    # Should NOT include active pointer or building pointer
+    assert not any("🎪 🎯" in label for label in labels)
+    assert not any("🎪 🏗️" in label for label in labels)

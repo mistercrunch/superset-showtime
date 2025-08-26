@@ -15,7 +15,7 @@ def test_pullrequest_creation():
     pr = PullRequest(1234, labels)
 
     assert pr.pr_number == 1234
-    assert pr.labels == labels
+    assert pr.labels == set(labels)
     assert len(pr.shows) == 1
     assert pr.current_show is not None
     assert pr.current_show.sha == "abc123f"
@@ -127,7 +127,7 @@ def test_pullrequest_determine_action():
     # No triggers, but different SHA - create new environment (SHA-specific)
     pr_auto = PullRequest(1234, ["🎪 abc123f 🚦 running", "🎪 🎯 abc123f"])
     assert pr_auto._determine_action("def456a") == "create_environment"
-    
+
     # Failed environment, no triggers - create new (retry logic)
     pr_failed = PullRequest(1234, ["🎪 abc123f 🚦 failed", "🎪 🎯 abc123f"])
     assert pr_failed._determine_action("abc123f") == "create_environment"
@@ -452,11 +452,7 @@ def test_pullrequest_sync_same_sha_no_action(mock_get_github):
     mock_get_github.return_value = mock_github
 
     # PR with existing healthy environment, same SHA, no triggers
-    pr = PullRequest(1234, [
-        "🎪 abc123f 🚦 running",
-        "🎪 🎯 abc123f",
-        "bug", "enhancement"
-    ])
+    pr = PullRequest(1234, ["🎪 abc123f 🚦 running", "🎪 🎯 abc123f", "bug", "enhancement"])
 
     result = pr.sync("abc123f")  # Same SHA as current
 
@@ -631,20 +627,23 @@ def test_pullrequest_update_show_labels(mock_get_github):
         mock_github.remove_label.assert_called()
 
 
-@patch('showtime.core.pull_request.get_github')
+@patch("showtime.core.pull_request.get_github")
 def test_pullrequest_update_show_labels_status_replacement(mock_get_github):
     """Test that status updates properly remove old status labels"""
     mock_github = Mock()
     mock_get_github.return_value = mock_github
-    
+
     # PR with multiple status labels (the bug scenario)
-    pr = PullRequest(1234, [
-        "🎪 abc123f 🚦 building",   # Old status
-        "🎪 abc123f 🚦 failed",    # Another old status  
-        "🎪 🎯 abc123f",           # Pointer
-        "🎪 abc123f 📅 2024-01-15T14-30",
-    ])
-    
+    pr = PullRequest(
+        1234,
+        [
+            "🎪 abc123f 🚦 building",  # Old status
+            "🎪 abc123f 🚦 failed",  # Another old status
+            "🎪 🎯 abc123f",  # Pointer
+            "🎪 abc123f 📅 2024-01-15T14-30",
+        ],
+    )
+
     # Show transitioning to running
     show = Show(
         pr_number=1234,
@@ -652,15 +651,171 @@ def test_pullrequest_update_show_labels_status_replacement(mock_get_github):
         status="running",  # New status
         created_at="2024-01-15T14-30",
     )
-    
-    with patch.object(pr, 'refresh_labels'):
+
+    with patch.object(pr, "refresh_labels"):
         pr._update_show_labels(show, dry_run=False)
-        
+
         # Should remove BOTH old status labels
         remove_calls = [call.args[1] for call in mock_github.remove_label.call_args_list]
         assert "🎪 abc123f 🚦 building" in remove_calls
         assert "🎪 abc123f 🚦 failed" in remove_calls
-        
+
         # Should add new status label
         add_calls = [call.args[1] for call in mock_github.add_label.call_args_list]
         assert "🎪 abc123f 🚦 running" in add_calls
+
+
+# Test new centralized label management methods
+
+
+@patch("showtime.core.pull_request.get_github")
+def test_pullrequest_add_label_with_logging(mock_get_github):
+    """Test PullRequest.add_label() with logging and state update"""
+    mock_github = Mock()
+    mock_get_github.return_value = mock_github
+
+    pr = PullRequest(1234, ["existing-label"])
+
+    # Test adding new label
+    pr.add_label("new-label")
+
+    # Should call GitHub API
+    mock_github.add_label.assert_called_once_with(1234, "new-label")
+
+    # Should update local state
+    assert "new-label" in pr.labels
+    assert "existing-label" in pr.labels
+
+
+@patch("showtime.core.pull_request.get_github")
+def test_pullrequest_remove_label_with_logging(mock_get_github):
+    """Test PullRequest.remove_label() with logging and state update"""
+    mock_github = Mock()
+    mock_get_github.return_value = mock_github
+
+    pr = PullRequest(1234, ["label1", "label2"])
+
+    # Test removing existing label
+    pr.remove_label("label1")
+
+    # Should call GitHub API
+    mock_github.remove_label.assert_called_once_with(1234, "label1")
+
+    # Should update local state
+    assert "label1" not in pr.labels
+    assert "label2" in pr.labels
+
+    # Test removing non-existent label (should be safe)
+    pr.remove_label("nonexistent")
+    assert len(mock_github.remove_label.call_args_list) == 2
+
+
+@patch("showtime.core.pull_request.get_github")
+def test_pullrequest_remove_sha_labels(mock_get_github):
+    """Test PullRequest.remove_sha_labels() for SHA-specific cleanup"""
+    mock_github = Mock()
+    mock_github.get_labels.return_value = [
+        "🎪 abc123f 🚦 building",
+        "🎪 abc123f 📅 2025-08-26",
+        "🎪 def456a 🚦 running",  # Different SHA
+        "🎪 🎯 def456a",  # Different SHA
+        "regular-label",
+    ]
+    mock_get_github.return_value = mock_github
+
+    pr = PullRequest(1234, [])
+
+    # Test removing labels for specific SHA
+    pr.remove_sha_labels("abc123f789")  # Full SHA
+
+    # Should call GitHub API for abc123f labels only
+    remove_calls = [call.args[1] for call in mock_github.remove_label.call_args_list]
+    assert "🎪 abc123f 🚦 building" in remove_calls
+    assert "🎪 abc123f 📅 2025-08-26" in remove_calls
+    assert "🎪 def456a 🚦 running" not in remove_calls
+    assert "🎪 🎯 def456a" not in remove_calls
+    assert "regular-label" not in remove_calls
+
+
+@patch("showtime.core.pull_request.get_github")
+def test_pullrequest_remove_showtime_labels(mock_get_github):
+    """Test PullRequest.remove_showtime_labels() for complete cleanup"""
+    mock_github = Mock()
+    mock_github.get_labels.return_value = [
+        "🎪 abc123f 🚦 running",
+        "🎪 🎯 abc123f",
+        "🎪 def456a 🚦 building",
+        "regular-label",
+        "bug",
+    ]
+    mock_get_github.return_value = mock_github
+
+    pr = PullRequest(1234, [])
+
+    # Test removing all showtime labels
+    pr.remove_showtime_labels()
+
+    # Should call GitHub API for all circus labels
+    remove_calls = [call.args[1] for call in mock_github.remove_label.call_args_list]
+    assert "🎪 abc123f 🚦 running" in remove_calls
+    assert "🎪 🎯 abc123f" in remove_calls
+    assert "🎪 def456a 🚦 building" in remove_calls
+    assert "regular-label" not in remove_calls
+    assert "bug" not in remove_calls
+
+
+@patch("showtime.core.pull_request.get_github")
+def test_pullrequest_set_show_status(mock_get_github):
+    """Test PullRequest.set_show_status() atomic status transitions"""
+    mock_github = Mock()
+    mock_github.get_labels.return_value = [
+        "🎪 abc123f 🚦 building",
+        "🎪 abc123f 🚦 failed",  # Duplicate/stale status
+        "🎪 abc123f 📅 2025-08-26",
+    ]
+    mock_get_github.return_value = mock_github
+
+    pr = PullRequest(1234, [])
+    show = Show(pr_number=1234, sha="abc123f", status="building")
+
+    # Test status transition with cleanup
+    pr.set_show_status(show, "deploying")
+
+    # Should remove all existing status labels
+    remove_calls = [call.args[1] for call in mock_github.remove_label.call_args_list]
+    assert "🎪 abc123f 🚦 building" in remove_calls
+    assert "🎪 abc123f 🚦 failed" in remove_calls
+
+    # Should add new status label
+    add_calls = [call.args[1] for call in mock_github.add_label.call_args_list]
+    assert "🎪 abc123f 🚦 deploying" in add_calls
+
+    # Should update show status
+    assert show.status == "deploying"
+
+
+@patch("showtime.core.pull_request.get_github")
+def test_pullrequest_set_active_show(mock_get_github):
+    """Test PullRequest.set_active_show() atomic active pointer management"""
+    mock_github = Mock()
+    mock_github.get_labels.return_value = [
+        "🎪 🎯 old123f",  # Old active pointer
+        "🎪 🎯 other456",  # Another old pointer
+        "🎪 abc123f 🚦 running",
+    ]
+    mock_get_github.return_value = mock_github
+
+    pr = PullRequest(1234, [])
+    show = Show(pr_number=1234, sha="abc123f", status="running")
+
+    # Test setting active show
+    pr.set_active_show(show)
+
+    # Should remove all existing active pointers
+    remove_calls = [call.args[1] for call in mock_github.remove_label.call_args_list]
+    assert "🎪 🎯 old123f" in remove_calls
+    assert "🎪 🎯 other456" in remove_calls
+
+    # Should add new active pointer
+    add_calls = [call.args[1] for call in mock_github.add_label.call_args_list]
+    assert "🎪 🎯 abc123f" in add_calls
