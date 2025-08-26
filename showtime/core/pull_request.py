@@ -187,7 +187,6 @@ class PullRequest:
 
     def set_show_status(self, show: Show, new_status: str) -> None:
         """Atomically update show status with thorough label cleanup"""
-        old_status = show.status
         show.status = new_status
 
         # 1. Refresh labels to get current GitHub state
@@ -198,16 +197,12 @@ class PullRequest:
             label for label in self.labels if label.startswith(f"🎪 {show.sha} 🚦 ")
         ]
 
-        if status_labels_to_remove:
-            print(f"🧹 Cleaning up status labels for {show.sha}: {status_labels_to_remove}")
-            for label in status_labels_to_remove:
-                self.remove_label(label)
+        for label in status_labels_to_remove:
+            self.remove_label(label)
 
         # 3. Add the new status label
         new_status_label = f"🎪 {show.sha} 🚦 {new_status}"
         self.add_label(new_status_label)
-
-        print(f"📊 Status transition: {show.sha} {old_status} → {new_status}")
 
     def analyze(self, target_sha: str, pr_state: str = "open") -> AnalysisResult:
         """Analyze what actions are needed (read-only, for --check-only)
