@@ -164,3 +164,68 @@ showtime list --status running
 showtime start 1234 --sha abc123f
 showtime stop 1234 --force
 ```
+
+## Race Condition Handling
+
+### Problem Description
+
+Double triggers can create race conditions in two scenarios:
+
+1. **Same SHA conflicts**: User pushes commit abc123f twice, creating 2 workflows for identical SHA
+2. **Stale locks**: Jobs crash or get killed, leaving environments stuck in "building/deploying" state indefinitely
+
+### Current Atomic Claim Mechanism
+
+The `PullRequest._atomic_claim()` method handles basic conflicts by:
+1. Checking if target SHA is already in progress states (`building`, `built`, `deploying`)
+2. Removing trigger labels atomically
+3. Setting building state immediately
+
+**Limitations**:
+- No distinction between valid locks and stale locks (>1 hour old)
+- `refresh_labels()` is expensive (~500ms) but called on every claim attempt
+- Crashed jobs can leave permanent locks that block future deployments
+
+### Proposed Smart Lock Detection Strategy
+
+**Two-phase approach optimizing for the common case**:
+
+#### Phase 1: Fast Path (95% of calls, ~5ms)
+```python
+def can_start_job(self, target_sha: str, action: str, use_cached: bool = True) -> tuple[bool, str]:
+    """Fast check using cached self.labels"""
+    # Check cached labels for basic conflicts
+    # Returns (can_start, reason)
+```
+
+#### Phase 2: Recovery Path (5% of calls, ~500ms)
+```python
+def double_check_and_cleanup_stale_locks(self, target_sha: str, stale_hours: int = 1, dry_run: bool = False) -> bool:
+    """Expensive: refresh labels, detect stale locks (>1h), clean them up"""
+    # Only called when fast path detects potential conflict
+    # Refreshes labels, checks timestamps, cleans stale AWS resources + GitHub labels
+```
+
+#### Enhanced Atomic Claim Logic
+```python
+def _atomic_claim(self, target_sha: str, action: str, dry_run: bool = False) -> bool:
+    # 1. Fast check with cached labels
+    can_start, reason = self.can_start_job(target_sha, action, use_cached=True)
+
+    if not can_start:
+        # 2. Expensive double-check and cleanup
+        can_start = self.double_check_and_cleanup_stale_locks(target_sha, stale_hours=1, dry_run=dry_run)
+
+    # 3. Continue with existing trigger removal + building setup
+```
+
+### Key Benefits
+
+- **Performance**: 95% fast path using cached labels (~5ms vs ~500ms)
+- **Reliability**: Automatic recovery from stale locks (crashed/killed jobs)
+- **Clarity**: Clear distinction between valid conflicts and recoverable states
+- **Safety**: Only cleans locks older than configurable threshold (default: 1 hour)
+
+### Implementation Notes
+
+This enhancement can be implemented when race conditions become problematic in practice. The current trigger removal mechanism already handles most same-SHA conflicts effectively due to the speed of GitHub label operations.

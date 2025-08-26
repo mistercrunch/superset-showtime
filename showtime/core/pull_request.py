@@ -60,7 +60,7 @@ class PullRequest:
 
     def __init__(self, pr_number: int, labels: List[str]):
         self.pr_number = pr_number
-        self.labels = labels
+        self.labels = set(labels)  # Convert to set for O(1) operations
         self._shows = self._parse_shows_from_labels()
 
     @property
@@ -151,8 +151,39 @@ class PullRequest:
 
     def refresh_labels(self) -> None:
         """Refresh labels from GitHub and reparse shows"""
-        self.labels = get_github().get_labels(self.pr_number)
+        self.labels = set(get_github().get_labels(self.pr_number))
         self._shows = self._parse_shows_from_labels()
+
+    def add_label(self, label: str) -> None:
+        """Add label with logging and optimistic state update"""
+        print(f"🏷️ Added: {label}")
+        get_github().add_label(self.pr_number, label)
+        self.labels.add(label)
+
+    def remove_label(self, label: str) -> None:
+        """Remove label with logging and optimistic state update"""
+        print(f"🗑️ Removed: {label}")
+        get_github().remove_label(self.pr_number, label)
+        self.labels.discard(label)  # Safe - won't raise if not present
+
+    def remove_sha_labels(self, sha: str) -> None:
+        """Remove all labels for a specific SHA"""
+        sha_short = sha[:7]
+        labels_to_remove = [
+            label for label in self.labels if label.startswith("🎪") and sha_short in label
+        ]
+        if labels_to_remove:
+            print(f"🗑️ Removing SHA {sha_short} labels: {labels_to_remove}")
+            for label in labels_to_remove:
+                self.remove_label(label)
+
+    def remove_showtime_labels(self) -> None:
+        """Remove ALL circus tent labels"""
+        circus_labels = [label for label in self.labels if label.startswith("🎪 ")]
+        if circus_labels:
+            print(f"🎪 Removing all showtime labels: {circus_labels}")
+            for label in circus_labels:
+                self.remove_label(label)
 
     def analyze(self, target_sha: str, pr_state: str = "open") -> AnalysisResult:
         """Analyze what actions are needed (read-only, for --check-only)
@@ -245,10 +276,12 @@ class PullRequest:
                 show.status = "running"
                 print(f"✅ Deployment completed - environment running at {show.ip}:8080")
                 self._update_show_labels(show, dry_run_github)
-                
+
                 # Blue-green cleanup: stop all other environments for this PR
-                cleaned_count = self.stop_previous_environments(show.sha, dry_run_github, dry_run_aws)
-                
+                cleaned_count = self.stop_previous_environments(
+                    show.sha, dry_run_github, dry_run_aws
+                )
+
                 # Show AWS console URLs for monitoring
                 self._show_service_urls(show)
 
@@ -267,7 +300,7 @@ class PullRequest:
                 print(f"🔄 Rolling update: {old_show.sha} → {new_show.sha}")
                 self._post_rolling_start_comment(old_show, new_show, dry_run_github)
 
-                # Phase 1: Docker build  
+                # Phase 1: Docker build
                 print("🐳 Building updated Docker image...")
                 new_show.build_docker(dry_run_docker)
                 new_show.status = "built"
@@ -280,10 +313,12 @@ class PullRequest:
                 new_show.status = "running"
                 print(f"✅ Rolling update completed - new environment at {new_show.ip}:8080")
                 self._update_show_labels(new_show, dry_run_github)
-                
+
                 # Blue-green cleanup: stop all other environments for this PR
-                cleaned_count = self.stop_previous_environments(new_show.sha, dry_run_github, dry_run_aws)
-                
+                cleaned_count = self.stop_previous_environments(
+                    new_show.sha, dry_run_github, dry_run_aws
+                )
+
                 # Show AWS console URLs for monitoring
                 self._show_service_urls(new_show)
 
@@ -298,7 +333,7 @@ class PullRequest:
                     self._post_cleanup_comment(self.current_show, dry_run_github)
                     # Remove all circus labels after successful stop
                     if not dry_run_github:
-                        get_github().remove_circus_labels(self.pr_number)
+                        self.remove_showtime_labels()
                         print("🏷️ GitHub labels cleaned up")
                     print("✅ Environment destroyed")
                 return SyncResult(success=True, action_taken="destroy_environment")
@@ -330,7 +365,7 @@ class PullRequest:
             self.current_show.stop(**kwargs)
             # Remove all circus labels after successful stop
             if not kwargs.get("dry_run_github", False):
-                get_github().remove_circus_labels(self.pr_number)
+                self.remove_showtime_labels()
             return SyncResult(success=True, action_taken="stopped")
         except Exception as e:
             return SyncResult(success=False, action_taken="stop_failed", error=str(e))
@@ -366,15 +401,15 @@ class PullRequest:
             for show in pr.shows:
                 # Determine show type based on pointer presence
                 show_type = "orphaned"  # Default
-                
+
                 # Check for active pointer
                 if any(label == f"🎪 🎯 {show.sha}" for label in pr.labels):
                     show_type = "active"
-                # Check for building pointer  
+                # Check for building pointer
                 elif any(label == f"🎪 🏗️ {show.sha}" for label in pr.labels):
                     show_type = "building"
                 # No pointer = orphaned
-                
+
                 environment_data = {
                     "pr_number": pr_number,
                     "status": "active",  # Keep for compatibility
@@ -397,12 +432,12 @@ class PullRequest:
         """Determine what sync action is needed based on target SHA state"""
         # CRITICAL: Get fresh labels before any decisions
         self.refresh_labels()
-        
+
         target_sha_short = target_sha[:7]  # Ensure we're working with short SHA
-        
+
         # Get the specific show for the target SHA
         target_show = self.get_show_by_sha(target_sha_short)
-        
+
         # Check for explicit trigger labels
         trigger_labels = [label for label in self.labels if "showtime-trigger-" in label]
 
@@ -440,16 +475,16 @@ class PullRequest:
         """Atomically claim this PR for the current job based on target SHA state"""
         # CRITICAL: Get fresh labels before any decisions
         self.refresh_labels()
-        
+
         target_sha_short = target_sha[:7]
         target_show = self.get_show_by_sha(target_sha_short)
-        
-        # 1. Validate current state allows this action for target SHA  
+
+        # 1. Validate current state allows this action for target SHA
         if action in ["create_environment", "rolling_update", "auto_sync"]:
             if target_show and target_show.status in [
                 "building",
-                "built", 
-                "deploying", 
+                "built",
+                "deploying",
             ]:
                 return False  # Target SHA already in progress - ONLY conflict case returns
 
@@ -462,7 +497,7 @@ class PullRequest:
         if trigger_labels:
             print(f"🏷️ Removing trigger labels: {trigger_labels}")
             for trigger_label in trigger_labels:
-                get_github().remove_label(self.pr_number, trigger_label)
+                self.remove_label(trigger_label)
         else:
             print("🏷️ No trigger labels to remove")
 
@@ -470,16 +505,16 @@ class PullRequest:
         if action in ["create_environment", "rolling_update", "auto_sync"]:
             building_show = self._create_new_show(target_sha)
             building_show.status = "building"
-            
-            # Update labels to reflect building state
-            print(f"🏷️ Removing existing circus labels...")
-            get_github().remove_circus_labels(self.pr_number)
-            
+
+            # Update labels to reflect building state - only remove for this SHA
+            print(f"🏷️ Removing labels for SHA {target_sha[:7]}...")
+            self.remove_sha_labels(target_sha)
+
             new_labels = building_show.to_circus_labels()
             print(f"🏷️ Creating new labels: {new_labels}")
             for label in new_labels:
                 try:
-                    get_github().add_label(self.pr_number, label)
+                    self.add_label(label)
                     print(f"  ✅ Added: {label}")
                 except Exception as e:
                     print(f"  ❌ Failed to add {label}: {e}")
@@ -583,23 +618,21 @@ class PullRequest:
 
         # First, remove any existing status labels for this SHA to ensure clean transitions
         sha_status_labels = [
-            label for label in self.labels 
-            if label.startswith(f"🎪 {show.sha} 🚦 ")
+            label for label in self.labels if label.startswith(f"🎪 {show.sha} 🚦 ")
         ]
         for old_status_label in sha_status_labels:
-            get_github().remove_label(self.pr_number, old_status_label)
+            self.remove_label(old_status_label)
 
         # For running environments, ensure only ONE active pointer exists
         if show.status == "running":
             # Remove ALL existing active pointers (there should only be one)
             existing_active_pointers = [
-                label for label in self.labels 
-                if label.startswith("🎪 🎯 ")
+                label for label in self.labels if label.startswith("🎪 🎯 ")
             ]
             for old_pointer in existing_active_pointers:
                 print(f"🎯 Removing old active pointer: {old_pointer}")
-                get_github().remove_label(self.pr_number, old_pointer)
-            
+                self.remove_label(old_pointer)
+
             # CRITICAL: Refresh after removals before differential calculation
             if existing_active_pointers:
                 print("🔄 Refreshing labels after pointer cleanup...")
@@ -607,11 +640,13 @@ class PullRequest:
 
         # Now do normal differential updates - only for this SHA
         current_sha_labels = {
-            label for label in self.labels 
-            if label.startswith("🎪") and (
-                label.startswith(f"🎪 {show.sha} ") or  # SHA-first format: 🎪 abc123f 📅 ...
-                label.startswith(f"🎪 🎯 {show.sha}") or  # Pointer format: 🎪 🎯 abc123f
-                label.startswith(f"🎪 🏗️ {show.sha}")    # Building pointer: 🎪 🏗️ abc123f
+            label
+            for label in self.labels
+            if label.startswith("🎪")
+            and (
+                label.startswith(f"🎪 {show.sha} ")  # SHA-first format: 🎪 abc123f 📅 ...
+                or label.startswith(f"🎪 🎯 {show.sha}")  # Pointer format: 🎪 🎯 abc123f
+                or label.startswith(f"🎪 🏗️ {show.sha}")  # Building pointer: 🎪 🏗️ abc123f
             )
         }
         desired_labels = set(show.to_circus_labels())
@@ -622,12 +657,12 @@ class PullRequest:
         # Only add labels that don't exist
         labels_to_add = desired_labels - current_sha_labels
         for label in labels_to_add:
-            get_github().add_label(self.pr_number, label)
+            self.add_label(label)
 
         # Only remove labels that shouldn't exist (excluding status labels already handled)
         labels_to_remove = current_sha_labels - desired_labels
         for label in labels_to_remove:
-            get_github().remove_label(self.pr_number, label)
+            self.remove_label(label)
 
         # Final refresh to update cache with all changes
         self.refresh_labels()
@@ -635,54 +670,57 @@ class PullRequest:
     def _show_service_urls(self, show: Show) -> None:
         """Show AWS console URLs for monitoring deployment"""
         from .github_messages import get_aws_console_urls
-        
+
         urls = get_aws_console_urls(show.ecs_service_name)
-        print(f"\n🎪 Monitor deployment progress:")
+        print("\n🎪 Monitor deployment progress:")
         print(f"📝 Logs: {urls['logs']}")
         print(f"📊 Service: {urls['service']}")
         print("")
 
-    def stop_previous_environments(self, keep_sha: str, dry_run_github: bool = False, dry_run_aws: bool = False) -> int:
+    def stop_previous_environments(
+        self, keep_sha: str, dry_run_github: bool = False, dry_run_aws: bool = False
+    ) -> int:
         """Stop all environments except the specified SHA (blue-green cleanup)
-        
+
         Args:
             keep_sha: SHA of environment to keep running
-            dry_run_github: Skip GitHub label operations  
+            dry_run_github: Skip GitHub label operations
             dry_run_aws: Skip AWS operations
-            
+
         Returns:
             Number of environments stopped
         """
         # Note: Labels should be fresh from recent _update_show_labels() call
         stopped_count = 0
-        
+
         for show in self.shows:
             if show.sha != keep_sha:
                 print(f"🧹 Cleaning up old environment: {show.sha} ({show.status})")
                 try:
                     show.stop(dry_run_github=dry_run_github, dry_run_aws=dry_run_aws)
-                    
+
                     # Remove ONLY existing labels for this old environment (not theoretical ones)
                     if not dry_run_github:
                         existing_labels = [
-                            label for label in self.labels 
-                            if label.startswith(f"🎪 {show.sha} ") or 
-                               label == f"🎪 🎯 {show.sha}" or 
-                               label == f"🎪 🏗️ {show.sha}"
+                            label
+                            for label in self.labels
+                            if label.startswith(f"🎪 {show.sha} ")
+                            or label == f"🎪 🎯 {show.sha}"
+                            or label == f"🎪 🏗️ {show.sha}"
                         ]
                         print(f"🏷️ Removing existing labels for {show.sha}: {existing_labels}")
                         for label in existing_labels:
                             try:
-                                get_github().remove_label(self.pr_number, label)
+                                self.remove_label(label)
                             except Exception as e:
                                 print(f"⚠️ Failed to remove label {label}: {e}")
-                    
+
                     stopped_count += 1
                     print(f"✅ Stopped environment {show.sha}")
-                    
+
                 except Exception as e:
                     print(f"❌ Failed to stop environment {show.sha}: {e}")
-                    
+
         if stopped_count > 0:
             print(f"🧹 Blue-green cleanup: stopped {stopped_count} old environments")
             # Refresh labels after cleanup
@@ -690,5 +728,5 @@ class PullRequest:
                 self.refresh_labels()
         else:
             print("ℹ️ No old environments to clean up")
-            
+
         return stopped_count

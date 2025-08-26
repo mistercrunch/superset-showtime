@@ -111,14 +111,6 @@ class GitHubInterface:
             if response.status_code not in (200, 204, 404):
                 response.raise_for_status()
 
-    def set_labels(self, pr_number: int, labels: List[str]) -> None:
-        """Replace all labels on a PR"""
-        url = f"{self.base_url}/repos/{self.org}/{self.repo}/issues/{pr_number}/labels"
-
-        with httpx.Client() as client:
-            response = client.put(url, headers=self.headers, json={"labels": labels})
-            response.raise_for_status()
-
     def get_latest_commit_sha(self, pr_number: int) -> str:
         """Get the latest commit SHA for a PR"""
         pr_data = self.get_pr_data(pr_number)
