@@ -41,6 +41,37 @@ jobs:
       pull-requests: write
 
     steps:
+      - name: Security Check - Authorize Synchronize Events
+        if: github.event_name == 'pull_request_target' && github.event.action == 'synchronize'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const actor = context.actor;
+            console.log(`🔍 Checking authorization for ${actor} on synchronize event`);
+
+            const { data: permission } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              username: actor
+            });
+
+            console.log(`📊 Permission level for ${actor}: ${permission.permission}`);
+
+            if (!['write', 'admin'].includes(permission.permission)) {
+              console.log(`🚨 Blocking unauthorized synchronize from ${actor}`);
+
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                labels: ['🎪 🔒 showtime-blocked']
+              });
+
+              core.setFailed(`🔒 Unauthorized synchronize event blocked for ${actor} (permission: ${permission.permission})`);
+            } else {
+              console.log(`✅ Authorized synchronize from ${actor}`);
+            }
+
       - name: Install Superset Showtime
         run: pip install superset-showtime
 

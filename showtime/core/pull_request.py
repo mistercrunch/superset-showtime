@@ -213,6 +213,50 @@ class PullRequest:
         active_pointer = f"{active_prefix}{show.sha}"  # "🎪 🎯 abc123f"
         self.add_label(active_pointer)
 
+    def _check_authorization(self) -> bool:
+        """Check if current GitHub actor is authorized for operations"""
+        import os
+
+        import httpx
+
+        # Only check in GitHub Actions context
+        if os.getenv("GITHUB_ACTIONS") != "true":
+            return True
+
+        actor = os.getenv("GITHUB_ACTOR")
+        if not actor:
+            return True  # No actor info, allow operation
+
+        try:
+            # Use existing GitHubInterface for consistency
+            github = get_github()
+
+            # Check collaborator permissions
+            perm_url = f"{github.base_url}/repos/{github.org}/{github.repo}/collaborators/{actor}/permission"
+
+            with httpx.Client() as client:
+                response = client.get(perm_url, headers=github.headers)
+                if response.status_code == 404:
+                    return False  # Not a collaborator
+                response.raise_for_status()
+
+                data = response.json()
+                permission = data.get("permission", "none")
+
+                # Allow write and admin permissions only
+                authorized = permission in ["write", "admin"]
+
+                if not authorized:
+                    print(f"🚨 Unauthorized actor {actor} (permission: {permission})")
+                    # Set blocked label for security
+                    self.add_label("🎪 🔒 showtime-blocked")
+
+                return authorized
+
+        except Exception as e:
+            print(f"⚠️ Authorization check failed: {e}")
+            return True  # Fail open for non-security operations
+
     def analyze(self, target_sha: str, pr_state: str = "open") -> AnalysisResult:
         """Analyze what actions are needed (read-only, for --check-only)
 
@@ -471,6 +515,10 @@ class PullRequest:
 
         # Check for blocked state first (fast bailout)
         if "🎪 🔒 showtime-blocked" in self.labels:
+            return "blocked"
+
+        # Check authorization (security layer)
+        if not self._check_authorization():
             return "blocked"
 
         target_sha_short = target_sha[:7]  # Ensure we're working with short SHA

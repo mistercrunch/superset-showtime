@@ -2,6 +2,7 @@
 Tests for PullRequest class - PR-level orchestration
 """
 
+import os
 from unittest.mock import Mock, patch
 
 from showtime.core.pull_request import AnalysisResult, PullRequest, SyncResult
@@ -860,3 +861,82 @@ def test_pullrequest_determine_action_blocked(mock_get_github):
     action = pr._determine_action("abc123f")
 
     assert action == "blocked"
+
+
+@patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GITHUB_ACTOR": "external-user"})
+@patch("showtime.core.pull_request.get_github")
+def test_pullrequest_authorization_check_unauthorized(mock_get_github):
+    """Test authorization check blocks unauthorized users"""
+    mock_github = Mock()
+    mock_github.base_url = "https://api.github.com"
+    mock_github.org = "apache"
+    mock_github.repo = "superset"
+    mock_github.headers = {"Authorization": "Bearer token"}
+
+    # Mock unauthorized response
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"permission": "read"}  # Not write/admin
+
+    with patch("httpx.Client") as mock_client_class:
+        mock_client = Mock()
+        mock_client.get.return_value = mock_response
+        mock_client.__enter__.return_value = mock_client
+        mock_client.__exit__.return_value = None
+        mock_client_class.return_value = mock_client
+
+        mock_get_github.return_value = mock_github
+
+        pr = PullRequest(1234, [])
+
+        # Test unauthorized actor
+        authorized = pr._check_authorization()
+
+        assert authorized is False
+        # Should have added blocked label
+        mock_github.add_label.assert_called_once_with(1234, "🎪 🔒 showtime-blocked")
+
+
+@patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GITHUB_ACTOR": "maintainer-user"})
+@patch("showtime.core.pull_request.get_github")
+def test_pullrequest_authorization_check_authorized(mock_get_github):
+    """Test authorization check allows authorized users"""
+    mock_github = Mock()
+    mock_github.base_url = "https://api.github.com"
+    mock_github.org = "apache"
+    mock_github.repo = "superset"
+    mock_github.headers = {"Authorization": "Bearer token"}
+
+    # Mock authorized response
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"permission": "write"}  # Authorized
+
+    with patch("httpx.Client") as mock_client_class:
+        mock_client = Mock()
+        mock_client.get.return_value = mock_response
+        mock_client.__enter__.return_value = mock_client
+        mock_client.__exit__.return_value = None
+        mock_client_class.return_value = mock_client
+
+        mock_get_github.return_value = mock_github
+
+        pr = PullRequest(1234, [])
+
+        # Test authorized actor
+        authorized = pr._check_authorization()
+
+        assert authorized is True
+        # Should not add blocked label
+        assert not mock_github.add_label.called
+
+
+@patch.dict(os.environ, {"GITHUB_ACTIONS": "false"})
+def test_pullrequest_authorization_check_local():
+    """Test authorization check skipped in non-GHA environment"""
+    pr = PullRequest(1234, [])
+
+    # Should always return True for local development
+    authorized = pr._check_authorization()
+
+    assert authorized is True
