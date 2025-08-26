@@ -90,20 +90,10 @@ class PullRequest:
 
     @property
     def building_show(self) -> Optional[Show]:
-        """The currently building show (from 🏗️ label)"""
-        building_sha = None
-        for label in self.labels:
-            if label.startswith("🎪 🏗️ "):
-                building_sha = label.split(" ")[2]
-                break
-
-        if not building_sha:
-            return None
-
+        """The currently building show (from building/deploying status)"""
         for show in self.shows:
-            if show.sha == building_sha:
+            if show.status in ["building", "deploying"]:
                 return show
-
         return None
 
     @property
@@ -204,6 +194,25 @@ class PullRequest:
         new_status_label = f"🎪 {show.sha} 🚦 {new_status}"
         self.add_label(new_status_label)
 
+    def set_active_show(self, show: Show) -> None:
+        """Atomically set this show as the active environment"""
+        from .emojis import CIRCUS_PREFIX, MEANING_TO_EMOJI
+
+        # 1. Refresh to get current state
+        self.refresh_labels()
+
+        # 2. Remove ALL existing active pointers (ensure only one)
+        active_emoji = MEANING_TO_EMOJI["active"]  # Gets 🎯
+        active_prefix = f"{CIRCUS_PREFIX} {active_emoji} "  # "🎪 🎯 "
+        active_pointers = [label for label in self.labels if label.startswith(active_prefix)]
+
+        for pointer in active_pointers:
+            self.remove_label(pointer)
+
+        # 3. Set this show as the new active one
+        active_pointer = f"{active_prefix}{show.sha}"  # "🎪 🎯 abc123f"
+        self.add_label(active_pointer)
+
     def analyze(self, target_sha: str, pr_state: str = "open") -> AnalysisResult:
         """Analyze what actions are needed (read-only, for --check-only)
 
@@ -292,6 +301,7 @@ class PullRequest:
                 self.set_show_status(show, "deploying")
                 show.deploy_aws(dry_run_aws)
                 self.set_show_status(show, "running")
+                self.set_active_show(show)
                 print(f"✅ Deployment completed - environment running at {show.ip}:8080")
                 self._update_show_labels(show, dry_run_github)
 
@@ -328,6 +338,7 @@ class PullRequest:
                 self.set_show_status(new_show, "deploying")
                 new_show.deploy_aws(dry_run_aws)
                 self.set_show_status(new_show, "running")
+                self.set_active_show(new_show)
                 print(f"✅ Rolling update completed - new environment at {new_show.ip}:8080")
                 self._update_show_labels(new_show, dry_run_github)
 
@@ -423,7 +434,7 @@ class PullRequest:
                 if any(label == f"🎪 🎯 {show.sha}" for label in pr.labels):
                     show_type = "active"
                 # Check for building pointer
-                elif any(label == f"🎪 🏗️ {show.sha}" for label in pr.labels):
+                elif show.status in ["building", "deploying"]:
                     show_type = "building"
                 # No pointer = orphaned
 
@@ -662,7 +673,6 @@ class PullRequest:
             and (
                 label.startswith(f"🎪 {show.sha} ")  # SHA-first format: 🎪 abc123f 📅 ...
                 or label.startswith(f"🎪 🎯 {show.sha}")  # Pointer format: 🎪 🎯 abc123f
-                or label.startswith(f"🎪 🏗️ {show.sha}")  # Building pointer: 🎪 🏗️ abc123f
             )
         }
         desired_labels = set(show.to_circus_labels())
@@ -720,9 +730,7 @@ class PullRequest:
                         existing_labels = [
                             label
                             for label in self.labels
-                            if label.startswith(f"🎪 {show.sha} ")
-                            or label == f"🎪 🎯 {show.sha}"
-                            or label == f"🎪 🏗️ {show.sha}"
+                            if label.startswith(f"🎪 {show.sha} ") or label == f"🎪 🎯 {show.sha}"
                         ]
                         print(f"🏷️ Removing existing labels for {show.sha}: {existing_labels}")
                         for label in existing_labels:

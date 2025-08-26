@@ -96,21 +96,24 @@ class Show:
 
     def to_circus_labels(self) -> List[str]:
         """Convert show state to circus tent emoji labels (per-SHA format)"""
+        from .emojis import CIRCUS_PREFIX, MEANING_TO_EMOJI
+
         if not self.created_at:
             self.created_at = datetime.utcnow().strftime("%Y-%m-%dT%H-%M")
 
         labels = [
-            f"🎪 {self.sha} 🚦 {self.status}",  # SHA-first status
-            f"🎪 🎯 {self.sha}",  # Active pointer (no value)
-            f"🎪 {self.sha} 📅 {self.created_at}",  # SHA-first timestamp
-            f"🎪 {self.sha} ⌛ {self.ttl}",  # SHA-first TTL
+            f"{CIRCUS_PREFIX} {self.sha} {MEANING_TO_EMOJI['status']} {self.status}",  # SHA-first status
+            f"{CIRCUS_PREFIX} {self.sha} {MEANING_TO_EMOJI['created_at']} {self.created_at}",  # SHA-first timestamp
+            f"{CIRCUS_PREFIX} {self.sha} {MEANING_TO_EMOJI['ttl']} {self.ttl}",  # SHA-first TTL
         ]
 
         if self.ip:
-            labels.append(f"🎪 {self.sha} 🌐 {self.ip}:8080")
+            labels.append(f"{CIRCUS_PREFIX} {self.sha} {MEANING_TO_EMOJI['ip']} {self.ip}:8080")
 
         if self.requested_by:
-            labels.append(f"🎪 {self.sha} 🤡 {self.requested_by}")
+            labels.append(
+                f"{CIRCUS_PREFIX} {self.sha} {MEANING_TO_EMOJI['requested_by']} {self.requested_by}"
+            )
 
         return labels
 
@@ -158,7 +161,6 @@ class Show:
     def _build_docker_image(self) -> None:
         """Build Docker image for this environment"""
         import os
-        import platform
         import subprocess
 
         tag = f"apache/superset:pr-{self.pr_number}-{self.sha}-ci"
@@ -187,19 +189,23 @@ class Show:
         # Add caching based on environment
         if is_ci:
             # Full registry caching in CI (Docker driver supports it)
-            cmd.extend([
-                "--cache-from",
-                "type=registry,ref=apache/superset-cache:showtime",
-                "--cache-to",
-                "type=registry,mode=max,ref=apache/superset-cache:showtime",
-            ])
+            cmd.extend(
+                [
+                    "--cache-from",
+                    "type=registry,ref=apache/superset-cache:showtime",
+                    "--cache-to",
+                    "type=registry,mode=max,ref=apache/superset-cache:showtime",
+                ]
+            )
             print("🐳 CI environment: Using full registry caching")
         else:
             # Local build: cache-from only (no cache export)
-            cmd.extend([
-                "--cache-from",
-                "type=registry,ref=apache/superset-cache:showtime",
-            ])
+            cmd.extend(
+                [
+                    "--cache-from",
+                    "type=registry,ref=apache/superset-cache:showtime",
+                ]
+            )
             print("🐳 Local environment: Using cache-from only (no export)")
 
         # Add --load only when explicitly requested for local testing
