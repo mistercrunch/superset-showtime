@@ -185,6 +185,30 @@ class PullRequest:
             for label in circus_labels:
                 self.remove_label(label)
 
+    def set_show_status(self, show: Show, new_status: str) -> None:
+        """Atomically update show status with thorough label cleanup"""
+        old_status = show.status
+        show.status = new_status
+
+        # 1. Refresh labels to get current GitHub state
+        self.refresh_labels()
+
+        # 2. Remove ALL existing status labels for this SHA (not just the "expected" one)
+        status_labels_to_remove = [
+            label for label in self.labels if label.startswith(f"🎪 {show.sha} 🚦 ")
+        ]
+
+        if status_labels_to_remove:
+            print(f"🧹 Cleaning up status labels for {show.sha}: {status_labels_to_remove}")
+            for label in status_labels_to_remove:
+                self.remove_label(label)
+
+        # 3. Add the new status label
+        new_status_label = f"🎪 {show.sha} 🚦 {new_status}"
+        self.add_label(new_status_label)
+
+        print(f"📊 Status transition: {show.sha} {old_status} → {new_status}")
+
     def analyze(self, target_sha: str, pr_state: str = "open") -> AnalysisResult:
         """Analyze what actions are needed (read-only, for --check-only)
 
@@ -266,14 +290,13 @@ class PullRequest:
                 # Phase 1: Docker build
                 print("🐳 Building Docker image...")
                 show.build_docker(dry_run_docker)
-                show.status = "built"
                 print("✅ Docker build completed")
-                self._update_show_labels(show, dry_run_github)
 
                 # Phase 2: AWS deployment
                 print("☁️ Deploying to AWS ECS...")
+                self.set_show_status(show, "deploying")
                 show.deploy_aws(dry_run_aws)
-                show.status = "running"
+                self.set_show_status(show, "running")
                 print(f"✅ Deployment completed - environment running at {show.ip}:8080")
                 self._update_show_labels(show, dry_run_github)
 
@@ -303,14 +326,13 @@ class PullRequest:
                 # Phase 1: Docker build
                 print("🐳 Building updated Docker image...")
                 new_show.build_docker(dry_run_docker)
-                new_show.status = "built"
                 print("✅ Docker build completed")
-                self._update_show_labels(new_show, dry_run_github)
 
                 # Phase 2: Blue-green deployment
                 print("☁️ Deploying updated environment...")
+                self.set_show_status(new_show, "deploying")
                 new_show.deploy_aws(dry_run_aws)
-                new_show.status = "running"
+                self.set_show_status(new_show, "running")
                 print(f"✅ Rolling update completed - new environment at {new_show.ip}:8080")
                 self._update_show_labels(new_show, dry_run_github)
 
