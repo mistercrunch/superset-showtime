@@ -209,8 +209,8 @@ class GitHubInterface:
         all_labels = self.get_repository_labels()
         sha_labels = []
 
-        # Find labels with SHA patterns (7+ hex chars after 🎪)
-        sha_pattern = re.compile(r"^🎪 .* [a-f0-9]{7,}( .*)?$")
+        # Find labels with SHA patterns (7+ hex chars anywhere in label)
+        sha_pattern = re.compile(r"^🎪 .*[a-f0-9]{7,}.*$")
 
         for label in all_labels:
             if sha_pattern.match(label):
