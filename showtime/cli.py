@@ -750,7 +750,7 @@ def cleanup(
             github = get_github()
 
             try:
-                orphaned_labels = github.cleanup_sha_labels(dry_run=True)  # Preview
+                orphaned_labels = github.find_orphaned_labels(dry_run=True)  # Preview
 
                 if orphaned_labels:
                     p(f"🏷️ Found {len(orphaned_labels)} orphaned repository labels:")
@@ -763,14 +763,14 @@ def cleanup(
                         if typer.confirm(
                             f"Delete {len(orphaned_labels)} orphaned labels from repository?"
                         ):
-                            deleted_labels = github.cleanup_sha_labels(dry_run=False)
+                            deleted_labels = github.find_orphaned_labels(dry_run=False)
                             label_cleaned_count = len(deleted_labels)
                         else:
                             p("❌ Skipping repository label cleanup")
                     elif force or dry_run:
                         label_cleaned_count = len(orphaned_labels)
                         if not dry_run:
-                            github.cleanup_sha_labels(dry_run=False)
+                            github.find_orphaned_labels(dry_run=False)
 
                 if label_cleaned_count > 0:
                     p(f"🏷️ ✅ Cleaned up {label_cleaned_count} orphaned repository labels")

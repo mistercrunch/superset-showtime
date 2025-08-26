@@ -225,6 +225,59 @@ class GitHubInterface:
 
         return sha_labels
 
+    def find_orphaned_labels(self, dry_run: bool = False) -> List[str]:
+        """Find labels that exist in repository but aren't used on any PR"""
+        import re
+
+        print("🔍 Scanning repository labels...")
+
+        # 1. Get all repository labels with SHA patterns
+        all_repo_labels = self.get_repository_labels()
+        sha_pattern = re.compile(r"^🎪 .*[a-f0-9]{7,}.*$")
+        sha_repo_labels = {label for label in all_repo_labels if sha_pattern.match(label)}
+
+        print(f"📋 Found {len(sha_repo_labels)} SHA-containing labels in repository")
+
+        # 2. Get all labels actually used on PRs with circus labels
+        print("🔍 Scanning PRs with circus labels...")
+
+        # Import here to avoid circular import
+        import importlib
+
+        pull_request_module = importlib.import_module("showtime.core.pull_request")
+        PullRequest = pull_request_module.PullRequest
+
+        try:
+            pr_numbers = PullRequest.find_all_with_environments()
+            print(f"📋 Found {len(pr_numbers)} PRs with circus labels")
+
+            used_labels = set()
+            for pr_number in pr_numbers:
+                pr_labels = self.get_labels(pr_number)
+                circus_labels = {label for label in pr_labels if label.startswith("🎪 ")}
+                used_labels.update(circus_labels)
+
+            print(f"📋 Found {len(used_labels)} circus labels actually used on PRs")
+
+            # 3. Set difference to find orphaned labels
+            orphaned_labels = sha_repo_labels - used_labels
+
+            print(f"🗑️ Found {len(orphaned_labels)} truly orphaned labels")
+
+            if not dry_run and orphaned_labels:
+                deleted_labels = []
+                for label in orphaned_labels:
+                    if self.delete_repository_label(label):
+                        deleted_labels.append(label)
+                return deleted_labels
+
+            return list(orphaned_labels)
+
+        except Exception as e:
+            print(f"⚠️ Error during orphan detection: {e}")
+            # Fallback to old pattern-based method
+            return self.cleanup_sha_labels(dry_run)
+
     def create_or_update_label(self, name: str, color: str, description: str) -> bool:
         """Create or update a label with color and description"""
         import urllib.parse
