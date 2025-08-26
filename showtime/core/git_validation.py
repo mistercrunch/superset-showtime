@@ -134,6 +134,9 @@ def _validate_sha_via_github_api(required_sha: str) -> Tuple[bool, Optional[str]
             # If status is 'ahead' or 'identical', required SHA is ancestor (good)
             # If status is 'behind', current is behind required (bad)
             if status in ["ahead", "identical"]:
+                print(
+                    f"✅ Validated that required SHA {required_sha[:7]} is included in current branch"
+                )
                 return True, None
             else:
                 return (
