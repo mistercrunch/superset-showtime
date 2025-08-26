@@ -143,9 +143,9 @@ class GitHubInterface:
         url = f"{self.base_url}/search/issues"
         # Search for PRs with any circus tent labels
         params = {
-            "q": f"repo:{self.org}/{self.repo} is:pr 🎪",
+            "q": f"repo:{self.org}/{self.repo} is:pr is:open 🎪",
             "per_page": "100",
-        }  # Include closed PRs
+        }  # Only open PRs - closed PRs should have cleaned up labels
 
         with httpx.Client() as client:
             response = client.get(url, headers=self.headers, params=params)
