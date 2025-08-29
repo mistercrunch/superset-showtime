@@ -548,10 +548,14 @@ class PullRequest:
                 elif "showtime-trigger-stop" in trigger:
                     return "destroy_environment"
 
-        # No explicit triggers - check target SHA state
+        # No explicit triggers - only auto-create if there's ANY previous environment
         if not target_show:
-            # Target SHA doesn't exist - create it
-            return "create_environment"
+            # Target SHA doesn't exist - only create if there's any previous environment
+            if self.shows:  # Any previous environment exists
+                return "create_environment"
+            else:
+                # No previous environments - don't auto-create without explicit trigger
+                return "no_action"
         elif target_show.status == "failed":
             # Target SHA failed - rebuild it
             return "create_environment"
