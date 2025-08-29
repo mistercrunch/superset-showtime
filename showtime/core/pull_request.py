@@ -325,7 +325,12 @@ class PullRequest:
             )
 
         # 3. Atomic claim for environment changes (PR-level lock)
-        if action_needed in ["create_environment", "rolling_update", "auto_sync"]:
+        if action_needed in [
+            "create_environment",
+            "rolling_update",
+            "auto_sync",
+            "destroy_environment",
+        ]:
             print(f"🔒 Claiming environment for {action_needed}...")
             if not self._atomic_claim(target_sha, action_needed, dry_run_github):
                 print("❌ Claim failed - another job is active")
