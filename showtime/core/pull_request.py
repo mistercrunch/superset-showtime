@@ -411,16 +411,20 @@ class PullRequest:
                 return SyncResult(success=True, action_taken=action_needed, show=new_show)
 
             elif action_needed == "destroy_environment":
+                # Stop the current environment if it exists
                 if self.current_show:
                     print(f"🗑️ Destroying environment {self.current_show.sha}...")
                     self.current_show.stop(dry_run_github=dry_run_github, dry_run_aws=dry_run_aws)
                     print("☁️ AWS resources deleted")
                     self._post_cleanup_comment(self.current_show, dry_run_github)
-                    # Remove all circus labels after successful stop
-                    if not dry_run_github:
-                        self.remove_showtime_labels()
-                        print("🏷️ GitHub labels cleaned up")
-                    print("✅ Environment destroyed")
+                else:
+                    print("🗑️ No current environment to destroy")
+
+                # ALWAYS remove all circus labels for stop trigger, regardless of current_show
+                if not dry_run_github:
+                    self.remove_showtime_labels()
+                    print("🏷️ GitHub labels cleaned up")
+                print("✅ Environment destroyed")
                 return SyncResult(success=True, action_taken="destroy_environment")
 
             else:
@@ -441,16 +445,18 @@ class PullRequest:
 
     def stop_environment(self, **kwargs: Any) -> SyncResult:
         """Stop current environment (CLI stop command logic)"""
-        if not self.current_show:
-            return SyncResult(
-                success=True, action_taken="no_environment", error="No environment to stop"
-            )
-
         try:
-            self.current_show.stop(**kwargs)
-            # Remove all circus labels after successful stop
+            # Stop the current environment if it exists
+            if self.current_show:
+                self.current_show.stop(**kwargs)
+                print("☁️ AWS resources deleted")
+            else:
+                print("🗑️ No current environment to destroy")
+
+            # ALWAYS remove all circus labels for stop command, regardless of current_show
             if not kwargs.get("dry_run_github", False):
                 self.remove_showtime_labels()
+                print("🏷️ GitHub labels cleaned up")
             return SyncResult(success=True, action_taken="stopped")
         except Exception as e:
             return SyncResult(success=False, action_taken="stop_failed", error=str(e))
