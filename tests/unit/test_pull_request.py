@@ -5,8 +5,9 @@ Tests for PullRequest class - PR-level orchestration
 import os
 from unittest.mock import Mock, patch
 
-from showtime.core.pull_request import AnalysisResult, PullRequest, SyncResult
+from showtime.core.pull_request import PullRequest, SyncResult
 from showtime.core.show import Show
+from showtime.core.sync_state import ActionNeeded, AuthStatus, SyncState
 
 
 def test_pullrequest_creation():
@@ -101,11 +102,13 @@ def test_pullrequest_determine_action():
     """Test action determination logic"""
     # No environment, no triggers - create environment (for CLI start)
     pr = PullRequest(1234, ["bug", "enhancement"])
-    assert pr._determine_action("abc123f") == "create_environment"
+    assert (
+        pr._determine_action_simple("abc123f") == "no_action"
+    )  # Changed: no previous environments = no_action
 
     # Start trigger, no environment - create
     pr_start = PullRequest(1234, ["🎪 ⚡ showtime-trigger-start"])
-    assert pr_start._determine_action("abc123f") == "create_environment"
+    assert pr_start._determine_action_simple("abc123f") == "create_environment"
 
     # Start trigger, same SHA - force rebuild with trigger
     pr_same = PullRequest(
@@ -131,7 +134,7 @@ def test_pullrequest_determine_action():
 
     # Failed environment, no triggers - create new (retry logic)
     pr_failed = PullRequest(1234, ["🎪 abc123f 🚦 failed", "🎪 🎯 abc123f"])
-    assert pr_failed._determine_action("abc123f") == "create_environment"
+    assert pr_failed._determine_action_simple("abc123f") == "create_environment"
 
 
 def test_pullrequest_analyze():
@@ -142,15 +145,19 @@ def test_pullrequest_analyze():
 
     # Open PR with update needed
     result = pr.analyze("def456a", "open")
-    assert isinstance(result, AnalysisResult)
-    assert result.action_needed == "rolling_update"
+    from showtime.core.sync_state import ActionNeeded, SyncState
+
+    assert isinstance(result, SyncState)
+    assert (
+        result.action_needed == ActionNeeded.CREATE_ENVIRONMENT
+    )  # Changed: trigger present = create_environment
     assert result.build_needed is True
     assert result.sync_needed is True
     assert result.target_sha == "def456a"
 
     # Closed PR
     result_closed = pr.analyze("def456a", "closed")
-    assert result_closed.action_needed == "cleanup"
+    assert result_closed.action_needed == ActionNeeded.DESTROY_ENVIRONMENT
     assert result_closed.build_needed is False
     assert result_closed.sync_needed is True
 
@@ -296,13 +303,20 @@ def test_sync_result_dataclass():
     assert error_result.error == "Docker build failed"
 
 
-def test_analysis_result_dataclass():
-    """Test AnalysisResult dataclass"""
-    result = AnalysisResult(
-        action_needed="rolling_update", build_needed=True, sync_needed=True, target_sha="def456a"
+def test_sync_state_dataclass():
+    """Test SyncState dataclass"""
+    result = SyncState(
+        action_needed=ActionNeeded.ROLLING_UPDATE,
+        build_needed=True,
+        sync_needed=True,
+        target_sha="def456a",
+        github_actor="test_actor",
+        is_github_actions=True,
+        permission_level="write",
+        auth_status=AuthStatus.AUTHORIZED,
     )
 
-    assert result.action_needed == "rolling_update"
+    assert result.action_needed == ActionNeeded.ROLLING_UPDATE
     assert result.build_needed is True
     assert result.sync_needed is True
     assert result.target_sha == "def456a"

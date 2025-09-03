@@ -11,6 +11,9 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+# Constants
+DEFAULT_GITHUB_ACTOR = "unknown"
+
 
 @dataclass
 class GitHubError(Exception):
@@ -52,6 +55,22 @@ class GitHubInterface:
             pass  # gh CLI not installed
 
         return None
+
+    # GitHub Actor Resolution
+    @staticmethod
+    def get_current_actor() -> str:
+        """Get current GitHub actor with consistent fallback across the codebase"""
+        return os.getenv("GITHUB_ACTOR", DEFAULT_GITHUB_ACTOR)
+
+    @staticmethod
+    def get_actor_debug_info() -> dict:
+        """Get debug information about GitHub actor context"""
+        raw_actor = os.getenv("GITHUB_ACTOR")  # Could be None/empty
+        return {
+            "actor": GitHubInterface.get_current_actor(),
+            "is_github_actions": os.getenv("GITHUB_ACTIONS") == "true",
+            "raw_actor": raw_actor or "none",
+        }
 
     @property
     def headers(self) -> Dict[str, str]:

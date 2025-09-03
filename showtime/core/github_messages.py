@@ -16,7 +16,9 @@ AWS_REGION = "us-west-2"
 
 def get_github_actor() -> str:
     """Get current GitHub actor with fallback"""
-    return os.getenv("GITHUB_ACTOR", "unknown")
+    from .github import GitHubInterface
+
+    return GitHubInterface.get_current_actor()
 
 
 def get_github_workflow_url() -> str:

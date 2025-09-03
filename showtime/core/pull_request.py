@@ -4,7 +4,6 @@
 Handles atomic transactions, trigger processing, and environment orchestration.
 """
 
-import os
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, List, Optional
@@ -12,6 +11,7 @@ from typing import Any, List, Optional
 from .aws import AWSInterface
 from .github import GitHubInterface
 from .show import Show, short_sha
+from .sync_state import ActionNeeded, AuthStatus, BlockedReason, SyncState
 
 # Lazy singletons to avoid import-time failures
 _github = None
@@ -213,19 +213,27 @@ class PullRequest:
         active_pointer = f"{active_prefix}{show.sha}"  # "🎪 🎯 abc123f"
         self.add_label(active_pointer)
 
-    def _check_authorization(self) -> bool:
-        """Check if current GitHub actor is authorized for operations"""
-        import os
+    def _check_authorization(self) -> tuple[bool, dict]:
+        """Check if current GitHub actor is authorized for operations
 
+        Returns:
+            tuple: (is_authorized, debug_info_dict)
+        """
         import httpx
 
-        # Only check in GitHub Actions context
-        if os.getenv("GITHUB_ACTIONS") != "true":
-            return True
+        # Get actor info using centralized function
+        actor_info = GitHubInterface.get_actor_debug_info()
+        debug_info = {**actor_info, "permission": "unknown", "auth_status": "unknown"}
 
-        actor = os.getenv("GITHUB_ACTOR")
-        if not actor:
-            return True  # No actor info, allow operation
+        # Only check in GitHub Actions context
+        if not debug_info["is_github_actions"]:
+            debug_info["auth_status"] = "skipped_not_actions"
+            return True, debug_info
+
+        actor = debug_info["actor"]
+        if not actor or actor == "unknown":
+            debug_info["auth_status"] = "allowed_no_actor"
+            return True, debug_info
 
         try:
             # Use existing GitHubInterface for consistency
@@ -237,57 +245,201 @@ class PullRequest:
             with httpx.Client() as client:
                 response = client.get(perm_url, headers=github.headers)
                 if response.status_code == 404:
-                    return False  # Not a collaborator
+                    debug_info["permission"] = "not_collaborator"
+                    debug_info["auth_status"] = "denied_404"
+                    return False, debug_info
+
                 response.raise_for_status()
 
                 data = response.json()
                 permission = data.get("permission", "none")
+                debug_info["permission"] = permission
 
                 # Allow write and admin permissions only
                 authorized = permission in ["write", "admin"]
 
                 if not authorized:
+                    debug_info["auth_status"] = "denied_insufficient_perms"
                     print(f"🚨 Unauthorized actor {actor} (permission: {permission})")
                     # Set blocked label for security
                     self.add_label("🎪 🔒 showtime-blocked")
+                else:
+                    debug_info["auth_status"] = "authorized"
 
-                return authorized
+                return authorized, debug_info
 
         except Exception as e:
+            debug_info["auth_status"] = f"error_{type(e).__name__}"
+            debug_info["error"] = str(e)
             print(f"⚠️ Authorization check failed: {e}")
-            return True  # Fail open for non-security operations
+            return True, debug_info  # Fail open for non-security operations
 
-    def analyze(self, target_sha: str, pr_state: str = "open") -> AnalysisResult:
-        """Analyze what actions are needed (read-only, for --check-only)
+    def analyze(self, target_sha: str, pr_state: str = "open") -> SyncState:
+        """Analyze what actions are needed with comprehensive debugging info
 
         Args:
             target_sha: Target commit SHA to analyze
             pr_state: PR state (open/closed)
 
         Returns:
-            AnalysisResult with action plan and flags
+            SyncState with complete analysis and debug info
         """
+        import os
+
         # Handle closed PRs
         if pr_state == "closed":
-            return AnalysisResult(
-                action_needed="cleanup", build_needed=False, sync_needed=True, target_sha=target_sha
+            return SyncState(
+                action_needed=ActionNeeded.DESTROY_ENVIRONMENT,
+                build_needed=False,
+                sync_needed=True,
+                target_sha=target_sha,
+                github_actor=GitHubInterface.get_current_actor(),
+                is_github_actions=os.getenv("GITHUB_ACTIONS") == "true",
+                permission_level="cleanup",
+                auth_status=AuthStatus.SKIPPED_NOT_ACTIONS,
+                action_reason="pr_closed",
             )
 
+        # Get fresh labels
+        self.refresh_labels()
+
+        # Initialize state tracking
+        target_sha_short = target_sha[:7]
+        target_show = self.get_show_by_sha(target_sha_short)
+        trigger_labels = [label for label in self.labels if "showtime-trigger-" in label]
+
+        # Check for existing blocked label
+        blocked_reason = BlockedReason.NOT_BLOCKED
+        if "🎪 🔒 showtime-blocked" in self.labels:
+            blocked_reason = BlockedReason.EXISTING_BLOCKED_LABEL
+
+        # Check authorization
+        is_authorized, auth_debug = self._check_authorization()
+        if not is_authorized and blocked_reason == BlockedReason.NOT_BLOCKED:
+            blocked_reason = BlockedReason.AUTHORIZATION_FAILED
+
         # Determine action needed
-        action_needed = self._determine_action(target_sha)
-
-        # Determine if Docker build is needed
-        build_needed = action_needed in ["create_environment", "rolling_update", "auto_sync"]
-
-        # Determine if sync execution is needed
-        sync_needed = action_needed not in ["no_action", "blocked"]
-
-        return AnalysisResult(
-            action_needed=action_needed,
-            build_needed=build_needed,
-            sync_needed=sync_needed,
-            target_sha=target_sha,
+        action_needed_str = (
+            "blocked"
+            if blocked_reason != BlockedReason.NOT_BLOCKED
+            else self._determine_action_logic(target_sha_short, target_show, trigger_labels)
         )
+
+        # Map string to enum
+        action_map = {
+            "no_action": ActionNeeded.NO_ACTION,
+            "create_environment": ActionNeeded.CREATE_ENVIRONMENT,
+            "rolling_update": ActionNeeded.ROLLING_UPDATE,
+            "auto_sync": ActionNeeded.AUTO_SYNC,
+            "destroy_environment": ActionNeeded.DESTROY_ENVIRONMENT,
+            "blocked": ActionNeeded.BLOCKED,
+        }
+        action_needed = action_map.get(action_needed_str, ActionNeeded.NO_ACTION)
+
+        # Build sync state
+        return SyncState(
+            action_needed=action_needed,
+            build_needed=action_needed
+            in [
+                ActionNeeded.CREATE_ENVIRONMENT,
+                ActionNeeded.ROLLING_UPDATE,
+                ActionNeeded.AUTO_SYNC,
+            ],
+            sync_needed=action_needed not in [ActionNeeded.NO_ACTION, ActionNeeded.BLOCKED],
+            target_sha=target_sha,
+            github_actor=auth_debug.get("actor", "unknown"),
+            is_github_actions=auth_debug.get("is_github_actions", False),
+            permission_level=auth_debug.get("permission", "unknown"),
+            auth_status=self._parse_auth_status(auth_debug.get("auth_status", "unknown")),
+            blocked_reason=blocked_reason,
+            trigger_labels=trigger_labels,
+            target_show_status=target_show.status if target_show else None,
+            has_previous_shows=len(self.shows) > 0,
+            action_reason=self._get_action_reason(action_needed_str, target_show, trigger_labels),
+            auth_error=auth_debug.get("error"),
+        )
+
+    def _determine_action_logic(
+        self, target_sha_short: str, target_show: Optional[Show], trigger_labels: List[str]
+    ) -> str:
+        """Core logic for determining action (extracted for testability)"""
+        if trigger_labels:
+            for trigger in trigger_labels:
+                if "showtime-trigger-start" in trigger:
+                    if not target_show or target_show.status == "failed":
+                        return "create_environment"  # New SHA or failed SHA
+                    elif target_show.status in ["building", "built", "deploying"]:
+                        return "no_action"  # Target SHA already in progress
+                    elif target_show.status == "running":
+                        return "create_environment"  # Force rebuild with trigger
+                    else:
+                        return "create_environment"  # Default for unknown states
+                elif "showtime-trigger-stop" in trigger:
+                    return "destroy_environment"
+
+        # No explicit triggers - only auto-create if there's ANY previous environment
+        if not target_show:
+            # Target SHA doesn't exist - only create if there's any previous environment
+            if self.shows:  # Any previous environment exists
+                return "create_environment"
+            else:
+                # No previous environments - don't auto-create without explicit trigger
+                return "no_action"
+        elif target_show.status == "failed":
+            # Target SHA failed - rebuild it
+            return "create_environment"
+        elif target_show.status in ["building", "built", "deploying"]:
+            # Target SHA in progress - wait
+            return "no_action"
+        elif target_show.status == "running":
+            # Target SHA already running - no action needed
+            return "no_action"
+
+        return "no_action"
+
+    def _get_action_reason(
+        self, action_needed: str, target_show: Optional[Show], trigger_labels: List[str]
+    ) -> str:
+        """Get human-readable reason for the action"""
+        if action_needed == "blocked":
+            return "operation_blocked"
+        elif trigger_labels:
+            if any("trigger-start" in label for label in trigger_labels):
+                if not target_show:
+                    return "explicit_start_new_sha"
+                elif target_show.status == "failed":
+                    return "explicit_start_failed_sha"
+                elif target_show.status == "running":
+                    return "explicit_start_force_rebuild"
+                else:
+                    return "explicit_start_trigger"
+            elif any("trigger-stop" in label for label in trigger_labels):
+                return "explicit_stop_trigger"
+        elif action_needed == "create_environment":
+            if not target_show:
+                return "auto_sync_new_commit"
+            elif target_show.status == "failed":
+                return "auto_rebuild_failed"
+            else:
+                return "create_environment"
+        elif action_needed == "no_action":
+            if target_show and target_show.status == "running":
+                return "already_running"
+            elif target_show and target_show.status in ["building", "deploying"]:
+                return "in_progress"
+            else:
+                return "no_previous_environments"
+        return action_needed
+
+    def _parse_auth_status(self, auth_status_str: str) -> AuthStatus:
+        """Parse auth status string to enum, handling errors gracefully"""
+        try:
+            return AuthStatus(auth_status_str)
+        except ValueError:
+            # Handle error cases that include exception type (e.g., "error_UnsupportedProtocol")
+            if auth_status_str.startswith("error_"):
+                return AuthStatus.ERROR
+            return AuthStatus.ERROR
 
     def sync(
         self,
@@ -314,7 +466,7 @@ class PullRequest:
         """
 
         # 1. Determine what action is needed
-        action_needed = self._determine_action(target_sha)
+        action_needed = self._determine_action_simple(target_sha)
 
         # 2. Check for blocked state (fast bailout)
         if action_needed == "blocked":
@@ -519,8 +671,8 @@ class PullRequest:
 
         return all_environments
 
-    def _determine_action(self, target_sha: str) -> str:
-        """Determine what sync action is needed based on target SHA state"""
+    def _determine_action_simple(self, target_sha: str) -> str:
+        """Determine what sync action is needed (simple version for backwards compatibility)"""
         # CRITICAL: Get fresh labels before any decisions
         self.refresh_labels()
 
@@ -529,7 +681,8 @@ class PullRequest:
             return "blocked"
 
         # Check authorization (security layer)
-        if not self._check_authorization():
+        is_authorized, _ = self._check_authorization()
+        if not is_authorized:
             return "blocked"
 
         target_sha_short = target_sha[:7]  # Ensure we're working with short SHA
@@ -632,7 +785,7 @@ class PullRequest:
             status="building",
             created_at=datetime.utcnow().strftime("%Y-%m-%dT%H-%M"),
             ttl="24h",
-            requested_by=os.getenv("GITHUB_ACTOR", "unknown"),
+            requested_by=GitHubInterface.get_current_actor(),
         )
 
     def _post_building_comment(self, show: Show, dry_run: bool = False) -> None:

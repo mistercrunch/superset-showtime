@@ -181,13 +181,17 @@ def get_validation_error_message(required_sha: Optional[str] = None) -> str:
 
 This branch requires commit {sha_to_check} to be present in your Git history.
 
+[bold yellow]Why this commit is required:[/bold yellow]
+Showtime depends on Docker build infrastructure (LOAD_EXAMPLES_DUCKDB) and DuckDB
+examples support that was introduced in this commit. Without it, Docker builds will fail.
+
 [bold yellow]To resolve this:[/bold yellow]
 1. Ensure you're on the correct branch (usually main)
 2. Pull the latest changes: [cyan]git pull origin main[/cyan]
 3. Verify the commit exists: [cyan]git log --oneline | grep {sha_to_check[:7]}[/cyan]
 4. If needed, switch to main branch: [cyan]git checkout main[/cyan]
 
-[dim]This check prevents Showtime from running on outdated releases.[/dim]
+[dim]This prevents Docker build failures on PRs missing required infrastructure.[/dim]
 """.strip()
 
 

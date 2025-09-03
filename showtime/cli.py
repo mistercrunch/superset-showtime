@@ -73,10 +73,10 @@ def _get_github_workflow_url() -> str:
 
 
 def _get_github_actor() -> str:
-    """Get current GitHub actor with fallback"""
-    import os
+    """Get current GitHub actor with fallback (DEPRECATED: Use GitHubInterface.get_current_actor())"""
+    from .core.github import GitHubInterface
 
-    return os.getenv("GITHUB_ACTOR", DEFAULT_GITHUB_ACTOR)
+    return GitHubInterface.get_current_actor()
 
 
 def _get_showtime_footer() -> str:
@@ -537,11 +537,8 @@ def sync(
 
         if check_only:
             # Analysis mode - just return what's needed
-            analysis_result = pr.analyze(target_sha, pr_state)
-            p(f"build_needed={str(analysis_result.build_needed).lower()}")
-            p(f"sync_needed={str(analysis_result.sync_needed).lower()}")
-            p(f"pr_number={pr_number}")
-            p(f"target_sha={target_sha}")
+            sync_state = pr.analyze(target_sha, pr_state)
+            p(sync_state.to_gha_stdout(pr_number))
             return
 
         # Execution mode - do the sync
