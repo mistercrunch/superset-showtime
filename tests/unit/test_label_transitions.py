@@ -2,6 +2,7 @@
 Tests for circus tent label state transitions and cleanup
 """
 
+from typing import Any
 from unittest.mock import Mock, patch
 
 from showtime.core.pull_request import PullRequest
@@ -9,7 +10,7 @@ from showtime.core.show import Show
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_status_transition_building_to_running(mock_get_github):
+def test_status_transition_building_to_running(mock_get_github: Any) -> None:
     """Test clean transition from building to running state"""
     mock_github = Mock()
     mock_get_github.return_value = mock_github
@@ -47,7 +48,7 @@ def test_status_transition_building_to_running(mock_get_github):
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_status_transition_building_to_failed(mock_get_github):
+def test_status_transition_building_to_failed(mock_get_github: Any) -> None:
     """Test transition from building to failed state (Docker failure)"""
     mock_github = Mock()
     mock_get_github.return_value = mock_github
@@ -83,7 +84,7 @@ def test_status_transition_building_to_failed(mock_get_github):
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_multiple_orphaned_status_cleanup(mock_get_github):
+def test_multiple_orphaned_status_cleanup(mock_get_github: Any) -> None:
     """Test cleanup of multiple orphaned status labels (the bug scenario)"""
     mock_github = Mock()
     mock_get_github.return_value = mock_github
@@ -128,7 +129,7 @@ def test_multiple_orphaned_status_cleanup(mock_get_github):
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_status_transition_with_concurrent_changes(mock_get_github):
+def test_status_transition_with_concurrent_changes(mock_get_github: Any) -> None:
     """Test status transition doesn't interfere with other SHA labels"""
     mock_github = Mock()
     mock_get_github.return_value = mock_github
@@ -171,7 +172,7 @@ def test_status_transition_with_concurrent_changes(mock_get_github):
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_status_replacement_preserves_other_labels(mock_get_github):
+def test_status_replacement_preserves_other_labels(mock_get_github: Any) -> None:
     """Test that status replacement preserves non-status labels"""
     mock_github = Mock()
     mock_get_github.return_value = mock_github
@@ -214,7 +215,7 @@ def test_status_replacement_preserves_other_labels(mock_get_github):
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_status_transition_dry_run_mode(mock_get_github):
+def test_status_transition_dry_run_mode(mock_get_github: Any) -> None:
     """Test that dry run mode doesn't make GitHub API calls"""
     mock_github = Mock()
     mock_get_github.return_value = mock_github
@@ -237,7 +238,7 @@ def test_status_transition_dry_run_mode(mock_get_github):
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_no_status_labels_to_clean(mock_get_github):
+def test_no_status_labels_to_clean(mock_get_github: Any) -> None:
     """Test behavior when no existing status labels exist"""
     mock_github = Mock()
     mock_get_github.return_value = mock_github
@@ -268,7 +269,7 @@ def test_no_status_labels_to_clean(mock_get_github):
         assert "🎪 abc123f 🚦 building" in add_calls
 
 
-def test_status_label_identification_edge_cases():
+def test_status_label_identification_edge_cases() -> None:
     """Test edge cases in status label identification"""
 
     # Test various malformed labels that should not be treated as status
@@ -296,7 +297,7 @@ def test_status_label_identification_edge_cases():
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_atomic_claim_actually_creates_labels(mock_get_github):
+def test_atomic_claim_actually_creates_labels(mock_get_github: Any) -> None:
     """Test that atomic claim ACTUALLY creates labels, not just claims success"""
     mock_github = Mock()
     mock_github.get_labels.return_value = ["🎪 ⚡ showtime-trigger-start", "bug"]

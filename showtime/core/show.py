@@ -87,18 +87,24 @@ class Show:
         """Parse created_at timestamp into datetime object (UTC)"""
         from .date_utils import parse_circus_time
 
+        if self.created_at is None:
+            return None
         return parse_circus_time(self.created_at)
 
     def is_expired(self, max_age_hours: int) -> bool:
         """Check if this environment is expired based on age"""
         from .date_utils import is_expired
 
+        if self.created_at is None:
+            return False
         return is_expired(self.created_at, max_age_hours)
 
     def age_display(self) -> str:
         """Get human-readable age of this environment"""
         from .date_utils import age_display
 
+        if self.created_at is None:
+            return "unknown"
         return age_display(self.created_at)
 
     def to_circus_labels(self) -> List[str]:
@@ -160,7 +166,8 @@ class Show:
 
         # Delete AWS resources (pure technical work)
         if not dry_run_aws:
-            return aws.delete_environment(self.aws_service_name, self.pr_number)
+            result = aws.delete_environment(self.aws_service_name, self.pr_number)
+            return bool(result)
 
         return True  # Dry run is always "successful"
 

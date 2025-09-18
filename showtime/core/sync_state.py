@@ -59,7 +59,7 @@ class SyncState:
     blocked_reason: BlockedReason = BlockedReason.NOT_BLOCKED
 
     # Context info
-    trigger_labels: List[str] = None
+    trigger_labels: Optional[List[str]] = None
     target_show_status: Optional[str] = None
     has_previous_shows: bool = False
     action_reason: str = ""
@@ -67,7 +67,7 @@ class SyncState:
     # Error details (if any)
     auth_error: Optional[str] = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Initialize default values"""
         if self.trigger_labels is None:
             self.trigger_labels = []

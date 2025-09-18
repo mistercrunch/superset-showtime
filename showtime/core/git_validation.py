@@ -5,14 +5,17 @@ Validates that the current Git repository contains required commit SHA to preven
 usage with outdated releases.
 """
 
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
 
-try:
+if TYPE_CHECKING:
     from git import InvalidGitRepositoryError, Repo
-except ImportError:
-    # Fallback if GitPython is not available
-    Repo = None
-    InvalidGitRepositoryError = Exception
+else:
+    try:
+        from git import InvalidGitRepositoryError, Repo
+    except ImportError:
+        # Fallback if GitPython is not available
+        Repo = None
+        InvalidGitRepositoryError = Exception
 
 
 # Hard-coded required SHA - update this when needed
@@ -36,7 +39,9 @@ def is_git_repository(path: str = ".") -> bool:
     Returns:
         True if it's a Git repository, False otherwise
     """
-    if Repo is None:
+    try:
+        from git import InvalidGitRepositoryError, Repo
+    except ImportError:
         # GitPython not available, assume not a git repo
         return False
 
@@ -69,9 +74,12 @@ def validate_required_sha(required_sha: Optional[str] = None) -> Tuple[bool, Opt
         return _validate_sha_via_github_api(sha_to_check)
     except Exception as e:
         print(f"⚠️ GitHub API validation failed: {e}")
+        # Fall through to Git validation
 
     # Fallback to Git validation for non-GitHub origins
-    if Repo is None:
+    try:
+        from git import Repo
+    except ImportError:
         print("⚠️ GitPython not available, skipping SHA validation")
         return True, None
 
@@ -84,9 +92,6 @@ def validate_required_sha(required_sha: Optional[str] = None) -> Tuple[bool, Opt
             print(f"⚠️ Git validation failed: {error}")
             return True, None  # Allow operation to continue
 
-    except InvalidGitRepositoryError:
-        print("⚠️ Not a Git repository, skipping SHA validation")
-        return True, None
     except Exception as e:
         print(f"⚠️ Git validation error: {e}")
         return True, None

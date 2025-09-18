@@ -10,7 +10,7 @@ from showtime.core.show import Show
 from showtime.core.sync_state import ActionNeeded, AuthStatus, SyncState
 
 
-def test_pullrequest_creation():
+def test_pullrequest_creation() -> None:
     """Test basic PullRequest creation"""
     labels = ["🎪 abc123f 🚦 running", "🎪 🎯 abc123f", "bug", "enhancement"]
 
@@ -23,7 +23,7 @@ def test_pullrequest_creation():
     assert pr.current_show.sha == "abc123f"
 
 
-def test_pullrequest_empty():
+def test_pullrequest_empty() -> None:
     """Test PullRequest with no circus labels"""
     labels = ["bug", "enhancement", "documentation"]
 
@@ -34,7 +34,7 @@ def test_pullrequest_empty():
     assert pr.has_shows is False  # Property, not method
 
 
-def test_pullrequest_multiple_shows():
+def test_pullrequest_multiple_shows() -> None:
     """Test PullRequest with multiple shows during update"""
     labels = [
         "🎪 abc123f 🚦 running",  # Old active
@@ -56,7 +56,7 @@ def test_pullrequest_multiple_shows():
     assert pr.building_show.status == "building"
 
 
-def test_pullrequest_circus_labels_property():
+def test_pullrequest_circus_labels_property() -> None:
     """Test circus_labels property filtering"""
     labels = [
         "🎪 abc123f 🚦 running",
@@ -68,12 +68,13 @@ def test_pullrequest_circus_labels_property():
 
     pr = PullRequest(1234, labels)
 
-    expected_circus = ["🎪 abc123f 🚦 running", "🎪 🎯 abc123f", "🎪 abc123f 📅 2024-01-15T14-30"]
+    expected_circus = {"🎪 abc123f 🚦 running", "🎪 🎯 abc123f", "🎪 abc123f 📅 2024-01-15T14-30"}
 
-    assert pr.circus_labels == expected_circus
+    # Compare as sets since order is not guaranteed from set
+    assert set(pr.circus_labels) == expected_circus
 
 
-def test_pullrequest_get_show_by_sha():
+def test_pullrequest_get_show_by_sha() -> None:
     """Test getting show by SHA"""
     labels = [
         "🎪 abc123f 🚦 running",
@@ -98,71 +99,99 @@ def test_pullrequest_get_show_by_sha():
     assert show_missing is None
 
 
-def test_pullrequest_determine_action():
+def test_pullrequest_determine_action() -> None:
     """Test action determination logic"""
-    # No environment, no triggers - create environment (for CLI start)
-    pr = PullRequest(1234, ["bug", "enhancement"])
-    assert (
-        pr._determine_action_simple("abc123f") == "no_action"
-    )  # Changed: no previous environments = no_action
+    # Mock GitHub interface to avoid actual API calls
+    with patch("showtime.core.pull_request.get_github") as mock_get_github:
+        mock_github = Mock()
+        mock_get_github.return_value = mock_github
 
-    # Start trigger, no environment - create
-    pr_start = PullRequest(1234, ["🎪 ⚡ showtime-trigger-start"])
-    assert pr_start._determine_action_simple("abc123f") == "create_environment"
+        # No environment, no triggers - no action (no previous environments)
+        mock_github.get_labels.return_value = ["bug", "enhancement"]
+        pr = PullRequest(1234, ["bug", "enhancement"])
+        assert pr._determine_action("abc123f") == "no_action"
 
-    # Start trigger, same SHA - force rebuild with trigger
-    pr_same = PullRequest(
-        1234, ["🎪 ⚡ showtime-trigger-start", "🎪 abc123f 🚦 running", "🎪 🎯 abc123f"]
-    )
-    assert pr_same._determine_action("abc123f") == "create_environment"
+        # Start trigger, no environment - create
+        mock_github.get_labels.return_value = ["🎪 ⚡ showtime-trigger-start"]
+        pr_start = PullRequest(1234, ["🎪 ⚡ showtime-trigger-start"])
+        assert pr_start._determine_action("abc123f") == "create_environment"
 
-    # Start trigger, different SHA - create new environment (SHA-specific logic)
-    pr_update = PullRequest(
-        1234, ["🎪 ⚡ showtime-trigger-start", "🎪 abc123f 🚦 running", "🎪 🎯 abc123f"]
-    )
-    assert pr_update._determine_action("def456a") == "create_environment"
+        # Start trigger, same SHA - force rebuild with trigger
+        mock_github.get_labels.return_value = [
+            "🎪 ⚡ showtime-trigger-start",
+            "🎪 abc123f 🚦 running",
+            "🎪 🎯 abc123f",
+        ]
+        pr_same = PullRequest(
+            1234, ["🎪 ⚡ showtime-trigger-start", "🎪 abc123f 🚦 running", "🎪 🎯 abc123f"]
+        )
+        assert pr_same._determine_action("abc123f") == "create_environment"
 
-    # Stop trigger - destroy
-    pr_stop = PullRequest(
-        1234, ["🎪 🛑 showtime-trigger-stop", "🎪 abc123f 🚦 running", "🎪 🎯 abc123f"]
-    )
-    assert pr_stop._determine_action("def456a") == "destroy_environment"
+        # Start trigger, different SHA - create new environment (SHA-specific logic)
+        mock_github.get_labels.return_value = [
+            "🎪 ⚡ showtime-trigger-start",
+            "🎪 abc123f 🚦 running",
+            "🎪 🎯 abc123f",
+        ]
+        pr_update = PullRequest(
+            1234, ["🎪 ⚡ showtime-trigger-start", "🎪 abc123f 🚦 running", "🎪 🎯 abc123f"]
+        )
+        assert pr_update._determine_action("def456a") == "create_environment"
 
-    # No triggers, but different SHA - create new environment (SHA-specific)
-    pr_auto = PullRequest(1234, ["🎪 abc123f 🚦 running", "🎪 🎯 abc123f"])
-    assert pr_auto._determine_action("def456a") == "create_environment"
+        # Stop trigger - destroy
+        mock_github.get_labels.return_value = [
+            "🎪 🛑 showtime-trigger-stop",
+            "🎪 abc123f 🚦 running",
+            "🎪 🎯 abc123f",
+        ]
+        pr_stop = PullRequest(
+            1234, ["🎪 🛑 showtime-trigger-stop", "🎪 abc123f 🚦 running", "🎪 🎯 abc123f"]
+        )
+        assert pr_stop._determine_action("def456a") == "destroy_environment"
 
-    # Failed environment, no triggers - create new (retry logic)
-    pr_failed = PullRequest(1234, ["🎪 abc123f 🚦 failed", "🎪 🎯 abc123f"])
-    assert pr_failed._determine_action_simple("abc123f") == "create_environment"
+        # No triggers, but different SHA - create new environment (SHA-specific)
+        mock_github.get_labels.return_value = ["🎪 abc123f 🚦 running", "🎪 🎯 abc123f"]
+        pr_auto = PullRequest(1234, ["🎪 abc123f 🚦 running", "🎪 🎯 abc123f"])
+        assert pr_auto._determine_action("def456a") == "create_environment"
+
+        # Failed environment, no triggers - create new (retry logic)
+        mock_github.get_labels.return_value = ["🎪 abc123f 🚦 failed", "🎪 🎯 abc123f"]
+        pr_failed = PullRequest(1234, ["🎪 abc123f 🚦 failed", "🎪 🎯 abc123f"])
+        assert pr_failed._determine_action("abc123f") == "create_environment"
 
 
-def test_pullrequest_analyze():
+def test_pullrequest_analyze() -> None:
     """Test analysis functionality"""
-    labels = ["🎪 ⚡ showtime-trigger-start", "🎪 abc123f 🚦 running", "🎪 🎯 abc123f"]
-
-    pr = PullRequest(1234, labels)
-
-    # Open PR with update needed
-    result = pr.analyze("def456a", "open")
     from showtime.core.sync_state import ActionNeeded, SyncState
 
-    assert isinstance(result, SyncState)
-    assert (
-        result.action_needed == ActionNeeded.CREATE_ENVIRONMENT
-    )  # Changed: trigger present = create_environment
-    assert result.build_needed is True
-    assert result.sync_needed is True
-    assert result.target_sha == "def456a"
+    with patch("showtime.core.pull_request.get_github") as mock_get_github:
+        mock_github = Mock()
+        mock_get_github.return_value = mock_github
 
-    # Closed PR
-    result_closed = pr.analyze("def456a", "closed")
-    assert result_closed.action_needed == ActionNeeded.DESTROY_ENVIRONMENT
-    assert result_closed.build_needed is False
-    assert result_closed.sync_needed is True
+        labels = ["🎪 ⚡ showtime-trigger-start", "🎪 abc123f 🚦 running", "🎪 🎯 abc123f"]
+
+        # Mock refresh_labels to return the same labels
+        mock_github.get_labels.return_value = labels
+
+        pr = PullRequest(1234, labels)
+
+        # Open PR with update needed
+        result = pr.analyze("def456a", "open")
+
+        assert isinstance(result, SyncState)
+        assert result.action_needed == ActionNeeded.CREATE_ENVIRONMENT  # Trigger present
+        assert result.build_needed is True
+        assert result.sync_needed is True
+        assert result.target_sha == "def456a"
+
+        # Closed PR
+        result_closed = pr.analyze("def456a", "closed")
+        assert result_closed.action_needed == ActionNeeded.DESTROY_ENVIRONMENT
+        assert result_closed.build_needed is False
+        assert result_closed.sync_needed is True
 
 
-def test_pullrequest_get_status():
+def test_pullrequest_get_status() -> None:
     """Test status reporting"""
     # No environment
     pr_empty = PullRequest(1234, ["bug"])
@@ -190,13 +219,15 @@ def test_pullrequest_get_status():
     assert status["show"]["aws_service_name"] == "pr-1234-abc123f"
 
 
-def test_pullrequest_create_new_show():
+def test_pullrequest_create_new_show() -> None:
     """Test new show creation"""
+    from showtime.core.constants import DEFAULT_TTL
+
     pr = PullRequest(1234, [])
 
-    # Mock datetime for consistent testing
-    with patch("showtime.core.pull_request.datetime") as mock_dt:
-        mock_dt.utcnow.return_value.strftime.return_value = "2024-01-15T14-30"
+    # Mock format_utc_now for consistent testing
+    with patch("showtime.core.date_utils.format_utc_now") as mock_format:
+        mock_format.return_value = "2024-01-15T14-30"
 
         show = pr._create_new_show("abc123f1234567890abcdef")
 
@@ -204,12 +235,12 @@ def test_pullrequest_create_new_show():
         assert show.sha == "abc123f"  # Shortened
         assert show.status == "building"
         assert show.created_at == "2024-01-15T14-30"
-        assert show.ttl == "24h"
-        assert show.requested_by == "github_actor"
+        assert show.ttl == DEFAULT_TTL
+        assert show.requested_by == "unknown"  # Default when no actor set
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_from_id(mock_get_github):
+def test_pullrequest_from_id(mock_get_github: Mock) -> None:
     """Test loading PR from GitHub"""
     mock_github = Mock()
     mock_github.get_labels.return_value = ["🎪 abc123f 🚦 running", "bug"]
@@ -218,12 +249,12 @@ def test_pullrequest_from_id(mock_get_github):
     pr = PullRequest.from_id(1234)
 
     assert pr.pr_number == 1234
-    assert pr.labels == ["🎪 abc123f 🚦 running", "bug"]
+    assert pr.labels == {"🎪 abc123f 🚦 running", "bug"}  # Labels is now a set
     mock_github.get_labels.assert_called_once_with(1234)
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_refresh_labels(mock_get_github):
+def test_pullrequest_refresh_labels(mock_get_github: Mock) -> None:
     """Test refreshing labels from GitHub"""
     mock_github = Mock()
     mock_get_github.return_value = mock_github
@@ -243,7 +274,7 @@ def test_pullrequest_refresh_labels(mock_get_github):
     mock_github.get_labels.assert_called_once_with(1234)
 
 
-def test_pullrequest_label_parsing_edge_cases():
+def test_pullrequest_label_parsing_edge_cases() -> None:
     """Test edge cases in label parsing"""
     # Malformed labels should be ignored
     labels = [
@@ -264,7 +295,7 @@ def test_pullrequest_label_parsing_edge_cases():
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_list_all_environments(mock_get_github):
+def test_pullrequest_list_all_environments(mock_get_github: Mock) -> None:
     """Test listing all environments across PRs"""
     mock_github = Mock()
     mock_github.find_prs_with_shows.return_value = [1234, 5678]
@@ -283,7 +314,7 @@ def test_pullrequest_list_all_environments(mock_get_github):
     assert environments[1]["show"]["sha"] == "def456a"
 
 
-def test_sync_result_dataclass():
+def test_sync_result_dataclass() -> None:
     """Test SyncResult dataclass"""
     # Success result
     show = Show(pr_number=1234, sha="abc123f", status="running")
@@ -303,7 +334,7 @@ def test_sync_result_dataclass():
     assert error_result.error == "Docker build failed"
 
 
-def test_sync_state_dataclass():
+def test_sync_state_dataclass() -> None:
     """Test SyncState dataclass"""
     result = SyncState(
         action_needed=ActionNeeded.ROLLING_UPDATE,
@@ -322,7 +353,7 @@ def test_sync_state_dataclass():
     assert result.target_sha == "def456a"
 
 
-def test_pullrequest_no_current_show_properties():
+def test_pullrequest_no_current_show_properties() -> None:
     """Test properties when no current show exists"""
     pr = PullRequest(1234, ["bug"])
 
@@ -332,7 +363,7 @@ def test_pullrequest_no_current_show_properties():
     assert pr.circus_labels == []
 
 
-def test_pullrequest_multiple_pointers():
+def test_pullrequest_multiple_pointers() -> None:
     """Test handling multiple pointer scenarios"""
     # Both active and building pointers
     labels = [
@@ -344,29 +375,34 @@ def test_pullrequest_multiple_pointers():
 
     pr = PullRequest(1234, labels)
 
-    assert pr.current_show.sha == "abc123f"
-    assert pr.building_show.sha == "def456a"
+    current_show = pr.current_show
+    building_show = pr.building_show
+    assert current_show is not None
+    assert building_show is not None
+    assert current_show.sha == "abc123f"
+    assert building_show.sha == "def456a"
     assert len(pr.shows) == 2
 
 
-def test_pullrequest_orphaned_shows():
+def test_pullrequest_orphaned_shows() -> None:
     """Test shows without proper pointers"""
     # Show data but no pointer labels
     labels = [
         "🎪 abc123f 🚦 running",
         "🎪 abc123f 📅 2024-01-15T14-30",
-        # Missing 🎯 pointer - show won't be created
+        # Missing 🎯 pointer - show is created but not current
     ]
 
     pr = PullRequest(1234, labels)
 
-    # Should not create shows without pointers
-    assert len(pr.shows) == 0
+    # Shows are created based on status labels
+    assert len(pr.shows) == 1
+    # But there's no current_show without 🎯 pointer
     assert pr.current_show is None
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_find_all_with_environments(mock_get_github):
+def test_pullrequest_find_all_with_environments(mock_get_github: Mock) -> None:
     """Test finding all PRs with environments"""
     mock_github = Mock()
     mock_github.find_prs_with_shows.return_value = [1234, 5678, 9012]
@@ -378,7 +414,7 @@ def test_pullrequest_find_all_with_environments(mock_get_github):
     mock_github.find_prs_with_shows.assert_called_once()
 
 
-def test_pullrequest_stop_if_expired():
+def test_pullrequest_stop_if_expired() -> None:
     """Test expiration-based cleanup"""
     # Create PR with old environment
     old_time = "2024-01-14T14-30"  # Should be expired after 24h
@@ -409,25 +445,31 @@ def test_pullrequest_stop_if_expired():
         assert result is False
 
 
-def test_pullrequest_no_environment_methods():
+def test_pullrequest_no_environment_methods() -> None:
     """Test methods when no environment exists"""
-    pr = PullRequest(1234, ["bug"])
+    with patch("showtime.core.pull_request.get_github") as mock_get_github:
+        mock_github = Mock()
+        mock_get_github.return_value = mock_github
 
-    # stop_environment with no environment
-    result = pr.stop_environment()
-    assert result.success is True
-    assert result.action_taken == "no_environment"
-    assert "No environment to stop" in result.error
+        pr = PullRequest(1234, ["bug"])
 
-    # stop_if_expired with no environment
-    assert pr.stop_if_expired(24) is False
+        # stop_environment with no environment - still succeeds (removes labels)
+        result = pr.stop_environment(dry_run_github=True)
+        assert result.success is True
+        assert result.action_taken == "stopped"
+
+        # stop_if_expired with no environment
+        assert pr.stop_if_expired(24) is False
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_sync_create_environment(mock_get_github):
+def test_pullrequest_sync_create_environment(mock_get_github: Mock) -> None:
     """Test sync method creating new environment"""
     mock_github = Mock()
     mock_get_github.return_value = mock_github
+
+    # Mock refresh_labels to return start trigger
+    mock_github.get_labels.return_value = ["🎪 ⚡ showtime-trigger-start"]
 
     # PR with start trigger, no existing environment
     pr = PullRequest(1234, ["🎪 ⚡ showtime-trigger-start"])
@@ -443,8 +485,8 @@ def test_pullrequest_sync_create_environment(mock_get_github):
                         mock_create.return_value = mock_show
 
                         # Mock show methods
-                        mock_show.build_docker = Mock()
-                        mock_show.deploy_aws = Mock()
+                        mock_show.build_docker = Mock()  # type: ignore[method-assign]
+                        mock_show.deploy_aws = Mock()  # type: ignore[method-assign]
 
                         result = pr.sync(
                             "abc123f", dry_run_github=True, dry_run_aws=True, dry_run_docker=True
@@ -461,10 +503,18 @@ def test_pullrequest_sync_create_environment(mock_get_github):
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_sync_same_sha_no_action(mock_get_github):
+def test_pullrequest_sync_same_sha_no_action(mock_get_github: Mock) -> None:
     """Test sync method when no action needed (same SHA, healthy environment)"""
     mock_github = Mock()
     mock_get_github.return_value = mock_github
+
+    # Mock refresh_labels to return existing environment
+    mock_github.get_labels.return_value = [
+        "🎪 abc123f 🚦 running",
+        "🎪 🎯 abc123f",
+        "bug",
+        "enhancement",
+    ]
 
     # PR with existing healthy environment, same SHA, no triggers
     pr = PullRequest(1234, ["🎪 abc123f 🚦 running", "🎪 🎯 abc123f", "bug", "enhancement"])
@@ -477,10 +527,17 @@ def test_pullrequest_sync_same_sha_no_action(mock_get_github):
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_sync_rolling_update(mock_get_github):
+def test_pullrequest_sync_rolling_update(mock_get_github: Mock) -> None:
     """Test sync method performing rolling update"""
     mock_github = Mock()
     mock_get_github.return_value = mock_github
+
+    # Mock refresh_labels to return start trigger with existing environment
+    mock_github.get_labels.return_value = [
+        "🎪 ⚡ showtime-trigger-start",
+        "🎪 abc123f 🚦 running",
+        "🎪 🎯 abc123f",
+    ]
 
     # PR with existing environment and start trigger
     pr = PullRequest(
@@ -489,30 +546,38 @@ def test_pullrequest_sync_rolling_update(mock_get_github):
 
     with patch.object(pr, "_atomic_claim", return_value=True):
         with patch.object(pr, "_create_new_show") as mock_create:
-            with patch.object(pr, "_post_rolling_start_comment"):
+            with patch.object(pr, "_post_building_comment"):
                 with patch.object(pr, "_update_show_labels"):
-                    with patch.object(pr, "_post_rolling_success_comment"):
+                    with patch.object(pr, "_post_success_comment"):
                         # Mock new show
                         mock_new_show = Show(pr_number=1234, sha="def456a", status="building")
                         mock_create.return_value = mock_new_show
 
-                        mock_new_show.build_docker = Mock()
-                        mock_new_show.deploy_aws = Mock()
+                        mock_new_show.build_docker = Mock()  # type: ignore[method-assign]
+                        mock_new_show.deploy_aws = Mock()  # type: ignore[method-assign]
 
                         result = pr.sync(
                             "def456a", dry_run_github=True, dry_run_aws=True, dry_run_docker=True
                         )
 
                         assert result.success is True
-                        assert result.action_taken == "rolling_update"
+                        # With start trigger and different SHA, should create environment
+                        assert result.action_taken == "create_environment"
                         assert result.show == mock_new_show
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_sync_destroy_environment(mock_get_github):
+def test_pullrequest_sync_destroy_environment(mock_get_github: Mock) -> None:
     """Test sync method destroying environment"""
     mock_github = Mock()
     mock_get_github.return_value = mock_github
+
+    # Mock refresh_labels to return stop trigger with existing environment
+    mock_github.get_labels.return_value = [
+        "🎪 🛑 showtime-trigger-stop",
+        "🎪 abc123f 🚦 running",
+        "🎪 🎯 abc123f",
+    ]
 
     # PR with stop trigger and existing environment
     pr = PullRequest(
@@ -520,20 +585,24 @@ def test_pullrequest_sync_destroy_environment(mock_get_github):
     )
 
     with patch.object(pr, "_atomic_claim", return_value=True):
-        with patch.object(pr.current_show, "stop") as mock_stop:
+        # Mock at the Show class level since refresh_labels creates new Show objects
+        with patch("showtime.core.show.Show.stop", return_value=True) as mock_stop:
             with patch.object(pr, "_post_cleanup_comment"):
                 result = pr.sync("abc123f", dry_run_github=True, dry_run_aws=True)
 
                 assert result.success is True
                 assert result.action_taken == "destroy_environment"
-                mock_stop.assert_called_once()
+                mock_stop.assert_called_once_with(dry_run_github=True, dry_run_aws=True)
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_sync_claim_failed(mock_get_github):
+def test_pullrequest_sync_claim_failed(mock_get_github: Mock) -> None:
     """Test sync method when atomic claim fails"""
     mock_github = Mock()
     mock_get_github.return_value = mock_github
+
+    # Mock refresh_labels to return start trigger
+    mock_github.get_labels.return_value = ["🎪 ⚡ showtime-trigger-start"]
 
     pr = PullRequest(1234, ["🎪 ⚡ showtime-trigger-start"])
 
@@ -542,51 +611,64 @@ def test_pullrequest_sync_claim_failed(mock_get_github):
 
         assert result.success is False
         assert result.action_taken == "claim_failed"
+        assert result.error is not None
         assert "Another job is already active" in result.error
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_atomic_claim_success(mock_get_github):
+def test_pullrequest_atomic_claim_success(mock_get_github: Mock) -> None:
     """Test successful atomic claim"""
     mock_github = Mock()
     mock_get_github.return_value = mock_github
+
+    # Mock refresh_labels to return start trigger
+    mock_github.get_labels.return_value = ["🎪 ⚡ showtime-trigger-start"]
 
     pr = PullRequest(1234, ["🎪 ⚡ showtime-trigger-start"])
 
     # Mock GitHub operations
     mock_github.remove_label = Mock()
-    mock_github.remove_circus_labels = Mock()
     mock_github.add_label = Mock()
 
     with patch.object(pr, "_create_new_show") as mock_create:
         mock_show = Show(pr_number=1234, sha="abc123f", status="building")
         mock_create.return_value = mock_show
 
-        result = pr._atomic_claim("abc123f", "create_environment", dry_run=False)
+        with patch.object(pr, "remove_label") as mock_remove_label:
+            with patch.object(pr, "remove_sha_labels") as mock_remove_sha:
+                with patch.object(pr, "add_label"):
+                    result = pr._atomic_claim("abc123f", "create_environment", dry_run=False)
 
-        assert result is True
-        mock_github.remove_label.assert_called()
-        mock_github.remove_circus_labels.assert_called_once_with(1234)
+                    assert result is True
+                    # Verify trigger labels removed
+                    mock_remove_label.assert_called_with("🎪 ⚡ showtime-trigger-start")
+                    # Verify SHA labels removed
+                    mock_remove_sha.assert_called_with("abc123f")
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_atomic_claim_dry_run(mock_get_github):
+def test_pullrequest_atomic_claim_dry_run(mock_get_github: Mock) -> None:
     """Test atomic claim in dry run mode"""
     mock_github = Mock()
     mock_get_github.return_value = mock_github
+
+    # Mock refresh_labels to return start trigger
+    mock_github.get_labels.return_value = ["🎪 ⚡ showtime-trigger-start"]
 
     pr = PullRequest(1234, ["🎪 ⚡ showtime-trigger-start"])
 
     result = pr._atomic_claim("abc123f", "create_environment", dry_run=True)
 
     assert result is True
-    # Should not make any GitHub calls in dry run
+    # Should refresh labels even in dry run (for validation)
+    mock_github.get_labels.assert_called()
+    # But should not make other GitHub calls in dry run
     assert not mock_github.remove_label.called
-    assert not mock_github.remove_circus_labels.called
+    assert not mock_github.add_label.called
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_start_environment_wrapper(mock_get_github):
+def test_pullrequest_start_environment_wrapper(mock_get_github: Mock) -> None:
     """Test start_environment wrapper method"""
     mock_github = Mock()
     mock_github.get_latest_commit_sha.return_value = "abc123f1234567890"
@@ -608,7 +690,7 @@ def test_pullrequest_start_environment_wrapper(mock_get_github):
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_update_show_labels(mock_get_github):
+def test_pullrequest_update_show_labels(mock_get_github: Mock) -> None:
     """Test differential label updates"""
     mock_github = Mock()
     mock_github.add_label = Mock()
@@ -643,7 +725,7 @@ def test_pullrequest_update_show_labels(mock_get_github):
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_update_show_labels_status_replacement(mock_get_github):
+def test_pullrequest_update_show_labels_status_replacement(mock_get_github: Mock) -> None:
     """Test that status updates properly remove old status labels"""
     mock_github = Mock()
     mock_get_github.return_value = mock_github
@@ -684,7 +766,7 @@ def test_pullrequest_update_show_labels_status_replacement(mock_get_github):
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_add_label_with_logging(mock_get_github):
+def test_pullrequest_add_label_with_logging(mock_get_github: Mock) -> None:
     """Test PullRequest.add_label() with logging and state update"""
     mock_github = Mock()
     mock_get_github.return_value = mock_github
@@ -703,7 +785,7 @@ def test_pullrequest_add_label_with_logging(mock_get_github):
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_remove_label_with_logging(mock_get_github):
+def test_pullrequest_remove_label_with_logging(mock_get_github: Mock) -> None:
     """Test PullRequest.remove_label() with logging and state update"""
     mock_github = Mock()
     mock_get_github.return_value = mock_github
@@ -726,7 +808,7 @@ def test_pullrequest_remove_label_with_logging(mock_get_github):
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_remove_sha_labels(mock_get_github):
+def test_pullrequest_remove_sha_labels(mock_get_github: Mock) -> None:
     """Test PullRequest.remove_sha_labels() for SHA-specific cleanup"""
     mock_github = Mock()
     mock_github.get_labels.return_value = [
@@ -738,7 +820,15 @@ def test_pullrequest_remove_sha_labels(mock_get_github):
     ]
     mock_get_github.return_value = mock_github
 
-    pr = PullRequest(1234, [])
+    initial_labels = [
+        "🎪 abc123f 🚦 building",
+        "🎪 abc123f 📅 2025-08-26",
+        "🎪 def456a 🚦 running",  # Different SHA
+        "🎪 🎯 def456a",  # Different SHA
+        "regular-label",
+    ]
+
+    pr = PullRequest(1234, initial_labels)
 
     # Test removing labels for specific SHA
     pr.remove_sha_labels("abc123f789")  # Full SHA
@@ -753,7 +843,7 @@ def test_pullrequest_remove_sha_labels(mock_get_github):
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_remove_showtime_labels(mock_get_github):
+def test_pullrequest_remove_showtime_labels(mock_get_github: Mock) -> None:
     """Test PullRequest.remove_showtime_labels() for complete cleanup"""
     mock_github = Mock()
     mock_github.get_labels.return_value = [
@@ -765,7 +855,15 @@ def test_pullrequest_remove_showtime_labels(mock_get_github):
     ]
     mock_get_github.return_value = mock_github
 
-    pr = PullRequest(1234, [])
+    initial_labels = [
+        "🎪 abc123f 🚦 running",
+        "🎪 🎯 abc123f",
+        "🎪 def456a 🚦 building",
+        "regular-label",
+        "bug",
+    ]
+
+    pr = PullRequest(1234, initial_labels)
 
     # Test removing all showtime labels
     pr.remove_showtime_labels()
@@ -780,7 +878,7 @@ def test_pullrequest_remove_showtime_labels(mock_get_github):
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_set_show_status(mock_get_github):
+def test_pullrequest_set_show_status(mock_get_github: Mock) -> None:
     """Test PullRequest.set_show_status() atomic status transitions"""
     mock_github = Mock()
     mock_github.get_labels.return_value = [
@@ -810,7 +908,7 @@ def test_pullrequest_set_show_status(mock_get_github):
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_set_active_show(mock_get_github):
+def test_pullrequest_set_active_show(mock_get_github: Mock) -> None:
     """Test PullRequest.set_active_show() atomic active pointer management"""
     mock_github = Mock()
     mock_github.get_labels.return_value = [
@@ -837,7 +935,7 @@ def test_pullrequest_set_active_show(mock_get_github):
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_blocked_state(mock_get_github):
+def test_pullrequest_blocked_state(mock_get_github: Mock) -> None:
     """Test that blocked state prevents all operations"""
     mock_github = Mock()
     mock_github.get_labels.return_value = [
@@ -855,8 +953,10 @@ def test_pullrequest_blocked_state(mock_get_github):
     # Should fail with blocked error
     assert result.success is False
     assert result.action_taken == "blocked"
-    assert "🔒 Showtime operations are blocked" in result.error
-    assert "showtime-blocked" in result.error
+    error_msg = result.error
+    assert error_msg is not None
+    assert "🔒 Showtime operations are blocked" in error_msg
+    assert "showtime-blocked" in error_msg
 
     # Should not perform any operations
     assert not mock_github.add_label.called
@@ -864,13 +964,13 @@ def test_pullrequest_blocked_state(mock_get_github):
 
 
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_determine_action_blocked(mock_get_github):
+def test_pullrequest_determine_action_blocked(mock_get_github: Mock) -> None:
     """Test _determine_action returns 'blocked' when blocked label present"""
     mock_github = Mock()
     mock_github.get_labels.return_value = ["🎪 🔒 showtime-blocked", "🎪 ⚡ showtime-trigger-start"]
     mock_get_github.return_value = mock_github
 
-    pr = PullRequest(1234, [])
+    pr = PullRequest(1234, ["🎪 🔒 showtime-blocked", "🎪 ⚡ showtime-trigger-start"])
 
     action = pr._determine_action("abc123f")
 
@@ -879,7 +979,7 @@ def test_pullrequest_determine_action_blocked(mock_get_github):
 
 @patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GITHUB_ACTOR": "external-user"})
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_authorization_check_unauthorized(mock_get_github):
+def test_pullrequest_authorization_check_unauthorized(mock_get_github: Mock) -> None:
     """Test authorization check blocks unauthorized users"""
     mock_github = Mock()
     mock_github.base_url = "https://api.github.com"
@@ -895,25 +995,27 @@ def test_pullrequest_authorization_check_unauthorized(mock_get_github):
     with patch("httpx.Client") as mock_client_class:
         mock_client = Mock()
         mock_client.get.return_value = mock_response
-        mock_client.__enter__.return_value = mock_client
-        mock_client.__exit__.return_value = None
-        mock_client_class.return_value = mock_client
+        mock_client_instance = Mock()
+        mock_client_instance.__enter__ = Mock(return_value=mock_client)
+        mock_client_instance.__exit__ = Mock(return_value=None)
+        mock_client_class.return_value = mock_client_instance
 
         mock_get_github.return_value = mock_github
 
         pr = PullRequest(1234, [])
 
         # Test unauthorized actor
-        authorized = pr._check_authorization()
+        authorized, debug_info = pr._check_authorization()
 
         assert authorized is False
+        assert debug_info["auth_status"] == "denied_insufficient_perms"
         # Should have added blocked label
         mock_github.add_label.assert_called_once_with(1234, "🎪 🔒 showtime-blocked")
 
 
 @patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GITHUB_ACTOR": "maintainer-user"})
 @patch("showtime.core.pull_request.get_github")
-def test_pullrequest_authorization_check_authorized(mock_get_github):
+def test_pullrequest_authorization_check_authorized(mock_get_github: Mock) -> None:
     """Test authorization check allows authorized users"""
     mock_github = Mock()
     mock_github.base_url = "https://api.github.com"
@@ -929,28 +1031,31 @@ def test_pullrequest_authorization_check_authorized(mock_get_github):
     with patch("httpx.Client") as mock_client_class:
         mock_client = Mock()
         mock_client.get.return_value = mock_response
-        mock_client.__enter__.return_value = mock_client
-        mock_client.__exit__.return_value = None
-        mock_client_class.return_value = mock_client
+        mock_client_instance = Mock()
+        mock_client_instance.__enter__ = Mock(return_value=mock_client)
+        mock_client_instance.__exit__ = Mock(return_value=None)
+        mock_client_class.return_value = mock_client_instance
 
         mock_get_github.return_value = mock_github
 
         pr = PullRequest(1234, [])
 
         # Test authorized actor
-        authorized = pr._check_authorization()
+        authorized, debug_info = pr._check_authorization()
 
         assert authorized is True
+        assert debug_info["permission"] == "write"
         # Should not add blocked label
         assert not mock_github.add_label.called
 
 
 @patch.dict(os.environ, {"GITHUB_ACTIONS": "false"})
-def test_pullrequest_authorization_check_local():
+def test_pullrequest_authorization_check_local() -> None:
     """Test authorization check skipped in non-GHA environment"""
     pr = PullRequest(1234, [])
 
     # Should always return True for local development
-    authorized = pr._check_authorization()
+    authorized, debug_info = pr._check_authorization()
 
     assert authorized is True
+    assert debug_info["auth_status"] == "skipped_not_actions"

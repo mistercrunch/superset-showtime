@@ -126,7 +126,7 @@ class PullRequest:
         # Create Show objects for each SHA
         shows = []
         for sha in shas:
-            show = Show.from_circus_labels(self.pr_number, self.labels, sha)
+            show = Show.from_circus_labels(self.pr_number, list(self.labels), sha)
             if show:
                 shows.append(show)
 
@@ -321,7 +321,7 @@ class PullRequest:
         action_needed_str = (
             "blocked"
             if blocked_reason != BlockedReason.NOT_BLOCKED
-            else self._determine_action_logic(target_sha_short, target_show, trigger_labels)
+            else self._evaluate_action_logic(target_sha_short, target_show, trigger_labels)
         )
 
         # Map string to enum
@@ -358,10 +358,10 @@ class PullRequest:
             auth_error=auth_debug.get("error"),
         )
 
-    def _determine_action_logic(
+    def _evaluate_action_logic(
         self, target_sha_short: str, target_show: Optional[Show], trigger_labels: List[str]
     ) -> str:
-        """Core logic for determining action (extracted for testability)"""
+        """Pure logic for evaluating what action is needed (no side effects, for testability)"""
         if trigger_labels:
             for trigger in trigger_labels:
                 if "showtime-trigger-start" in trigger:
@@ -465,7 +465,7 @@ class PullRequest:
         """
 
         # 1. Determine what action is needed
-        action_needed = self._determine_action_simple(target_sha)
+        action_needed = self._determine_action(target_sha)
 
         # 2. Check for blocked state (fast bailout)
         if action_needed == "blocked":
@@ -680,8 +680,8 @@ class PullRequest:
 
         return all_environments
 
-    def _determine_action_simple(self, target_sha: str) -> str:
-        """Determine what sync action is needed (simple version for backwards compatibility)"""
+    def _determine_action(self, target_sha: str) -> str:
+        """Determine what sync action is needed (includes all checks and refreshes labels)"""
         # CRITICAL: Get fresh labels before any decisions
         self.refresh_labels()
 

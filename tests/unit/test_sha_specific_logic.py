@@ -6,40 +6,55 @@ The system should make decisions based on the target SHA's state,
 not the overall PR state.
 """
 
+from typing import Any
+from unittest.mock import Mock, patch
+
 from showtime.core.pull_request import PullRequest
 
 
-def test_target_sha_does_not_exist_should_build():
+@patch("showtime.core.pull_request.get_github")
+def test_target_sha_does_not_exist_should_build(mock_get_github: Any) -> None:
     """When target SHA doesn't exist, should create environment"""
+    mock_github = Mock()
+    mock_get_github.return_value = mock_github
+
+    labels = [
+        "🎪 abc123f 🚦 running",  # Different SHA running
+        "🎪 🎯 abc123f",  # Active pointer to different SHA
+        "🎪 def456a 🚦 failed",  # Different SHA failed
+        "🎪 xyz789b 🚦 building",  # Different SHA building
+    ]
+
+    # Mock refresh_labels to return the same labels
+    mock_github.get_labels.return_value = labels
+
     # PR with existing environments for different SHAs
-    pr = PullRequest(
-        1234,
-        [
-            "🎪 abc123f 🚦 running",  # Different SHA running
-            "🎪 🎯 abc123f",  # Active pointer to different SHA
-            "🎪 def456a 🚦 failed",  # Different SHA failed
-            "🎪 xyz789b 🚦 building",  # Different SHA building
-        ],
-    )
+    pr = PullRequest(1234, labels)
 
     # Target a completely new SHA
     action = pr._determine_action("new567c")
 
-    # Should create environment for new SHA
+    # Should create environment for new SHA (because there are existing environments)
     assert action == "create_environment"
 
 
-def test_target_sha_failed_should_rebuild():
+@patch("showtime.core.pull_request.get_github")
+def test_target_sha_failed_should_rebuild(mock_get_github: Any) -> None:
     """When target SHA is in failed state, should rebuild"""
-    pr = PullRequest(
-        1234,
-        [
-            "🎪 abc123f 🚦 running",  # Other SHA running
-            "🎪 🎯 abc123f",  # Active pointer
-            "🎪 def456a 🚦 failed",  # Target SHA failed
-            "🎪 🎯 def456a",  # Target has pointer (failed but pointed to)
-        ],
-    )
+    mock_github = Mock()
+    mock_get_github.return_value = mock_github
+
+    labels = [
+        "🎪 abc123f 🚦 running",  # Other SHA running
+        "🎪 🎯 abc123f",  # Active pointer
+        "🎪 def456a 🚦 failed",  # Target SHA failed
+        "🎪 🎯 def456a",  # Target has pointer (failed but pointed to)
+    ]
+
+    # Mock refresh_labels to return the same labels
+    mock_github.get_labels.return_value = labels
+
+    pr = PullRequest(1234, labels)
 
     # Target the failed SHA
     action = pr._determine_action("def456a")
@@ -48,17 +63,23 @@ def test_target_sha_failed_should_rebuild():
     assert action == "create_environment"
 
 
-def test_target_sha_building_should_wait():
+@patch("showtime.core.pull_request.get_github")
+def test_target_sha_building_should_wait(mock_get_github: Any) -> None:
     """When target SHA is already building, should not start another build"""
-    pr = PullRequest(
-        1234,
-        [
-            "🎪 abc123f 🚦 running",  # Other SHA running
-            "🎪 🎯 abc123f",  # Active pointer
-            "🎪 def456a 🚦 building",  # Target SHA building
-            "🎪 🏗️ def456a",  # Building pointer
-        ],
-    )
+    mock_github = Mock()
+    mock_get_github.return_value = mock_github
+
+    labels = [
+        "🎪 abc123f 🚦 running",  # Other SHA running
+        "🎪 🎯 abc123f",  # Active pointer
+        "🎪 def456a 🚦 building",  # Target SHA building
+        "🎪 🏗️ def456a",  # Building pointer
+    ]
+
+    # Mock refresh_labels to return the same labels
+    mock_github.get_labels.return_value = labels
+
+    pr = PullRequest(1234, labels)
 
     # Target the building SHA
     action = pr._determine_action("def456a")
@@ -67,16 +88,22 @@ def test_target_sha_building_should_wait():
     assert action == "no_action"
 
 
-def test_target_sha_running_should_not_rebuild():
+@patch("showtime.core.pull_request.get_github")
+def test_target_sha_running_should_not_rebuild(mock_get_github: Any) -> None:
     """When target SHA is already running, should not rebuild"""
-    pr = PullRequest(
-        1234,
-        [
-            "🎪 abc123f 🚦 running",  # Target SHA running
-            "🎪 🎯 abc123f",  # Active pointer
-            "🎪 def456a 🚦 building",  # Other SHA building
-        ],
-    )
+    mock_github = Mock()
+    mock_get_github.return_value = mock_github
+
+    labels = [
+        "🎪 abc123f 🚦 running",  # Target SHA running
+        "🎪 🎯 abc123f",  # Active pointer
+        "🎪 def456a 🚦 building",  # Other SHA building
+    ]
+
+    # Mock refresh_labels to return the same labels
+    mock_github.get_labels.return_value = labels
+
+    pr = PullRequest(1234, labels)
 
     # Target the running SHA (same as current)
     action = pr._determine_action("abc123f")
@@ -85,16 +112,22 @@ def test_target_sha_running_should_not_rebuild():
     assert action == "no_action"
 
 
-def test_target_sha_running_with_trigger_should_rebuild():
+@patch("showtime.core.pull_request.get_github")
+def test_target_sha_running_with_trigger_should_rebuild(mock_get_github: Any) -> None:
     """When target SHA is running but has start trigger, should rebuild"""
-    pr = PullRequest(
-        1234,
-        [
-            "🎪 ⚡ showtime-trigger-start",  # Explicit start trigger
-            "🎪 abc123f 🚦 running",  # Target SHA running
-            "🎪 🎯 abc123f",  # Active pointer
-        ],
-    )
+    mock_github = Mock()
+    mock_get_github.return_value = mock_github
+
+    labels = [
+        "🎪 ⚡ showtime-trigger-start",  # Explicit start trigger
+        "🎪 abc123f 🚦 running",  # Target SHA running
+        "🎪 🎯 abc123f",  # Active pointer
+    ]
+
+    # Mock refresh_labels to return the same labels
+    mock_github.get_labels.return_value = labels
+
+    pr = PullRequest(1234, labels)
 
     # Target the running SHA with explicit trigger
     action = pr._determine_action("abc123f")
@@ -103,16 +136,21 @@ def test_target_sha_running_with_trigger_should_rebuild():
     assert action == "create_environment"
 
 
-def test_atomic_claim_sha_specific_validation():
+@patch("showtime.core.pull_request.get_github")
+def test_atomic_claim_sha_specific_validation(mock_get_github: Any) -> None:
     """Atomic claim should validate based on target SHA state, not any environment"""
-    pr = PullRequest(
-        1234,
-        [
-            "🎪 abc123f 🚦 running",  # Other SHA running
-            "🎪 🎯 abc123f",  # Active pointer
-            "🎪 def456a 🚦 building",  # Other SHA building
-        ],
-    )
+    mock_github = Mock()
+    mock_get_github.return_value = mock_github
+    labels = [
+        "🎪 abc123f 🚦 running",  # Other SHA running
+        "🎪 🎯 abc123f",  # Active pointer
+        "🎪 def456a 🚦 building",  # Other SHA building
+    ]
+
+    # Mock refresh_labels to return the same labels
+    mock_github.get_labels.return_value = labels
+
+    pr = PullRequest(1234, labels)
 
     # Should allow claim for new SHA even though other SHAs are active
     can_claim_new = pr._atomic_claim("new567c", "create_environment", dry_run=True)
@@ -127,7 +165,7 @@ def test_atomic_claim_sha_specific_validation():
     assert can_claim_rolling is True
 
 
-def test_multiple_environments_pointer_management():
+def test_multiple_environments_pointer_management() -> None:
     """Test proper pointer management with multiple environments"""
     # Scenario: Multiple environments exist, need to identify which is which
     pr = PullRequest(
@@ -160,7 +198,7 @@ def test_multiple_environments_pointer_management():
     assert xyz789b_show.status == "failed"
 
 
-def test_rolling_update_should_clean_old_pointers():
+def test_rolling_update_should_clean_old_pointers() -> None:
     """Rolling update should remove old active pointer and add new one"""
     # This test defines the expected behavior for pointer management
     # Implementation should ensure only 1 active pointer exists at a time
