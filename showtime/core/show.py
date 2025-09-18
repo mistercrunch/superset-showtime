@@ -28,7 +28,7 @@ class Show:
     status: str  # building, built, deploying, running, updating, failed
     ip: Optional[str] = None  # Environment IP address
     created_at: Optional[str] = None  # ISO timestamp
-    ttl: str = "24h"  # 24h, 48h, close, etc.
+    ttl: str = "48h"  # 24h, 48h, close, etc.
     requested_by: Optional[str] = None  # GitHub username
 
     @property
@@ -80,26 +80,32 @@ class Show:
         """Check if environment needs update to latest SHA"""
         return self.sha != latest_sha[:7]
 
+    @property
+    def created_datetime(self) -> Optional[datetime]:
+        """Parse created_at timestamp into datetime object (UTC)"""
+        from .date_utils import parse_circus_time
+
+        return parse_circus_time(self.created_at)
+
     def is_expired(self, max_age_hours: int) -> bool:
         """Check if this environment is expired based on age"""
-        if not self.created_at:
-            return False
+        from .date_utils import is_expired
 
-        try:
-            from datetime import datetime, timedelta
+        return is_expired(self.created_at, max_age_hours)
 
-            created_time = datetime.fromisoformat(self.created_at.replace("-", ":"))
-            expiry_time = created_time + timedelta(hours=max_age_hours)
-            return datetime.now() > expiry_time
-        except (ValueError, AttributeError):
-            return False  # If we can't parse, assume not expired
+    def age_display(self) -> str:
+        """Get human-readable age of this environment"""
+        from .date_utils import age_display
+
+        return age_display(self.created_at)
 
     def to_circus_labels(self) -> List[str]:
         """Convert show state to circus tent emoji labels (per-SHA format)"""
+        from .date_utils import format_utc_now
         from .emojis import CIRCUS_PREFIX, MEANING_TO_EMOJI
 
         if not self.created_at:
-            self.created_at = datetime.utcnow().strftime("%Y-%m-%dT%H-%M")
+            self.created_at = format_utc_now()
 
         labels = [
             f"{CIRCUS_PREFIX} {self.sha} {MEANING_TO_EMOJI['status']} {self.status}",  # SHA-first status
@@ -142,21 +148,19 @@ class Show:
             # Mock successful deployment for dry-run
             self.ip = "52.1.2.3"
 
-    def stop(self, dry_run_github: bool = False, dry_run_aws: bool = False) -> None:
+    def stop(self, dry_run_github: bool = False, dry_run_aws: bool = False) -> bool:
         """Stop this environment (cleanup AWS resources)
 
-        Raises:
-            Exception: On cleanup failure
+        Returns:
+            True if successful, False otherwise
         """
         github, aws = get_interfaces()
 
         # Delete AWS resources (pure technical work)
         if not dry_run_aws:
-            success = aws.delete_environment(self.aws_service_name, self.pr_number)
-            if not success:
-                raise Exception(f"Failed to delete AWS service: {self.aws_service_name}")
+            return aws.delete_environment(self.aws_service_name, self.pr_number)
 
-        # No comments - PullRequest handles that!
+        return True  # Dry run is always "successful"
 
     def _build_docker_image(self) -> None:
         """Build Docker image for this environment"""

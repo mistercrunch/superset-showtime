@@ -74,16 +74,16 @@ class AWSInterface:
         4. Deploy and wait for stability
         5. Health check and return IP
         """
-        from datetime import datetime
-
-        from .show import Show
 
         # Create Show object for consistent AWS naming
+        from .date_utils import format_utc_now
+        from .show import Show
+
         show = Show(
             pr_number=pr_number,
             sha=sha[:7],  # Truncate to 7 chars like GitHub
             status="building",
-            created_at=datetime.utcnow().strftime("%Y-%m-%dT%H-%M"),
+            created_at=format_utc_now(),
             requested_by=github_user,
         )
 
@@ -173,67 +173,46 @@ class AWSInterface:
         except Exception as e:
             return EnvironmentResult(success=False, error=str(e))
 
-    def delete_environment(self, service_name: str, pr_number: int) -> bool:
+    def delete_environment(self, base_name: str, pr_number: int) -> bool:
         """
-        Delete ephemeral environment with proper verification
+        Delete ephemeral environment
 
-        Steps:
-        1. Check if ECS service exists 
-        2. Delete ECS service with force and wait for completion
-        3. Delete ECR image tag
-        4. Verify deletion completed
+        Args:
+            base_name: Base service name WITHOUT -service suffix (e.g., "pr-34868-abc123f")
+            pr_number: PR number for this environment
         """
         try:
-            ecs_service_name = f"{service_name}-service" if not service_name.endswith("-service") else service_name
+            # Simple: always add -service suffix
+            ecs_service_name = f"{base_name}-service"
             print(f"🗑️ Deleting ECS service: {ecs_service_name}")
-            
-            # Step 1: Check if service exists
-            if not self._service_exists(ecs_service_name):
-                print(f"✅ Service {ecs_service_name} already deleted")
-                return True
 
-            # Step 2: Delete ECS service (force delete) and wait
-            print(f"☁️ Initiating ECS service deletion...")
-            delete_response = self.ecs_client.delete_service(
-                cluster=self.cluster, 
-                service=ecs_service_name, 
-                force=True
-            )
-            print(f"🔄 Delete initiated: {delete_response.get('service', {}).get('status', 'unknown')}")
-
-            # Step 3: Wait for deletion to complete (crucial!)
-            print(f"⏳ Waiting for service deletion to complete...")
-            deletion_success = self._wait_for_service_deletion(ecs_service_name, timeout_minutes=10)
-            
-            if not deletion_success:
-                print(f"⚠️ Service deletion timeout - service may still exist")
+            # Delete ECS service with force flag (AWS will handle cleanup)
+            try:
+                self.ecs_client.delete_service(
+                    cluster=self.cluster, service=ecs_service_name, force=True
+                )
+                print(f"✅ ECS service deletion initiated: {ecs_service_name}")
+            except self.ecs_client.exceptions.ServiceNotFoundException:
+                print(f"ℹ️ Service {ecs_service_name} already deleted")
+            except Exception as e:
+                print(f"❌ AWS deletion failed: {e}")
                 return False
 
-            # Step 4: Delete ECR image tag
-            print(f"🐳 Cleaning up Docker image...")
-            # Fix SHA extraction: pr-34831-ac533ec-service → ac533ec
-            # Remove "pr-" prefix and "-service" suffix, then get SHA (last part)
-            base_name = service_name.replace("pr-", "").replace("-service", "")
-            parts = base_name.split("-")
-            sha = parts[-1] if len(parts) > 1 else base_name  # Last part is SHA
-            image_tag = f"pr-{pr_number}-{sha}-ci"
-
+            # Try to clean up ECR image - for showtime services, tag is base_name + "-ci"
             try:
+                image_tag = f"{base_name}-ci"
                 self.ecr_client.batch_delete_image(
                     repositoryName=self.repository, imageIds=[{"imageTag": image_tag}]
                 )
                 print(f"✅ Deleted ECR image: {image_tag}")
-            except self.ecr_client.exceptions.ImageNotFoundException:
-                print(f"ℹ️ ECR image {image_tag} already deleted")
+            except Exception:
+                pass  # Image cleanup is optional
 
-            print(f"✅ Environment {service_name} fully deleted")
             return True
 
         except Exception as e:
-            print(f"❌ AWS deletion failed: {e}")
-            raise AWSError(
-                message=str(e), operation="delete_environment", resource=service_name
-            ) from e
+            print(f"❌ Unexpected error: {e}")
+            return False
 
     def get_environment_ip(self, service_name: str) -> Optional[str]:
         """
@@ -701,19 +680,19 @@ class AWSInterface:
         try:
             # List all services in cluster
             response = self.ecs_client.list_services(cluster=self.cluster)
-            
+
             if not response.get("serviceArns"):
                 return []
-            
+
             # Extract service names and filter for showtime pattern
             showtime_services = []
             for service_arn in response["serviceArns"]:
                 service_name = service_arn.split("/")[-1]  # Extract name from ARN
                 if service_name.startswith("pr-") and "-service" in service_name:
                     showtime_services.append(service_name)
-            
+
             return sorted(showtime_services)
-            
+
         except Exception as e:
             print(f"❌ Failed to find showtime services: {e}")
             return []
@@ -845,10 +824,15 @@ class AWSInterface:
             for attempt in range(max_attempts):
                 # Check if service still exists
                 if not self._service_exists(service_name):
-                    print(f"✅ Service {service_name} fully deleted after {attempt * 5}s")
+                    if attempt == 0:
+                        print(
+                            f"✅ Service {service_name} deletion confirmed (was already draining)"
+                        )
+                    else:
+                        print(f"✅ Service {service_name} fully deleted after {attempt * 5}s")
                     return True
 
-                if attempt % 6 == 0:  # Every 30s
+                if attempt % 6 == 0 and attempt > 0:  # Every 30s after first check
                     print(f"⏳ Waiting for service deletion... ({attempt * 5}s elapsed)")
 
                 time.sleep(5)  # Check every 5 seconds

@@ -10,7 +10,6 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from .core.emojis import STATUS_DISPLAY
 from .core.github import GitHubError, GitHubInterface
 from .core.github_messages import (
     get_aws_console_urls,
@@ -96,7 +95,7 @@ def version() -> None:
 def start(
     pr_number: int = typer.Argument(..., help="PR number to create environment for"),
     sha: Optional[str] = typer.Option(None, "--sha", help="Specific commit SHA (default: latest)"),
-    ttl: Optional[str] = typer.Option("24h", help="Time to live (24h, 48h, 1w, close)"),
+    ttl: Optional[str] = typer.Option("48h", help="Time to live (24h, 48h, 1w, close)"),
     size: Optional[str] = typer.Option("standard", help="Environment size (standard, large)"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be done"),
     dry_run_aws: bool = typer.Option(
@@ -189,10 +188,10 @@ def status(
         table.add_column("Property", style="cyan")
         table.add_column("Value", style="white")
 
-        status_emoji = STATUS_DISPLAY
-        table.add_row(
-            "Status", f"{status_emoji.get(show_data['status'], '❓')} {show_data['status'].title()}"
-        )
+        from .core.emojis import STATUS_DISPLAY
+
+        status_display = STATUS_DISPLAY.get(show_data["status"], "❓")
+        table.add_row("Status", f"{status_display} {show_data['status'].title()}")
         table.add_row("Environment", f"`{show_data['sha']}`")
         table.add_row("AWS Service", f"`{show_data['aws_service_name']}`")
 
@@ -319,16 +318,15 @@ def list(
         # Create table with full terminal width
         table = Table(title="🎪 Environment List", expand=True)
         table.add_column("PR", style="cyan", min_width=6)
-        table.add_column("Type", style="white", min_width=8)
-        table.add_column("Status", style="white", min_width=12)
+        table.add_column("Service Name", style="white", min_width=20)
+        table.add_column("", style="white", min_width=2)  # Emoji type column
+        table.add_column("🟢", style="white", min_width=2)
         table.add_column("SHA", style="green", min_width=11)
-        table.add_column("Created", style="dim white", min_width=12)
+        table.add_column("Age", style="dim white", min_width=12)
         table.add_column("Superset URL", style="blue", min_width=25)
-        table.add_column("AWS Logs", style="dim blue", min_width=15)
+        table.add_column("Logs", style="dim blue", min_width=10)
         table.add_column("TTL", style="yellow", min_width=6)
         table.add_column("User", style="magenta", min_width=10)
-
-        status_emoji = STATUS_DISPLAY
 
         # Sort by PR number, then by show type (active first, then building, then orphaned)
         type_priority = {"active": 1, "building": 2, "orphaned": 3}
@@ -344,14 +342,14 @@ def list(
             show_data = env["show"]
             pr_number = env["pr_number"]
 
-            # Show type with appropriate styling (using single-width chars for alignment)
+            # Show type with emoji indicators
             show_type = show_data.get("show_type", "orphaned")
             if show_type == "active":
-                type_display = "* active"
+                type_display = "🎯"  # Active environment (has pointer)
             elif show_type == "building":
-                type_display = "# building"
+                type_display = "🔨"  # Building environment (hammer is single-width)
             else:
-                type_display = "! orphaned"
+                type_display = "👻"  # Orphaned environment (no pointer)
 
             # Make Superset URL clickable and show full URL
             if show_data["ip"]:
@@ -370,22 +368,19 @@ def list(
             pr_url = f"https://github.com/apache/superset/pull/{pr_number}"
             clickable_pr = f"[link={pr_url}]{pr_number}[/link]"
 
-            # Format creation time for display
-            created_display = show_data.get("created_at", "-")
-            if created_display and created_display != "-":
-                # Convert 2025-08-25T05-18 to more readable format
-                try:
-                    parts = created_display.replace("T", " ").replace("-", ":")
-                    created_display = parts[-8:]  # Show just HH:MM:SS
-                except Exception:
-                    pass  # Keep original if parsing fails
+            # Get age display from show
+            age_display = show_data.get("age", "-")
+
+            # Simple status display - just emoji
+            status_display = "🟢" if show_data["status"] == "running" else "❌"
 
             table.add_row(
                 clickable_pr,
+                f"{show_data['aws_service_name']}-service",
                 type_display,
-                f"{status_emoji.get(show_data['status'], '❓')} {show_data['status']}",
+                status_display,
                 show_data["sha"],
-                created_display,
+                age_display,
                 superset_url,
                 aws_logs_link,
                 show_data["ttl"],
@@ -676,13 +671,23 @@ def cleanup(
             return
 
         cleaned_count = 0
+        orphan_cleaned_count = 0
+
         for pr_number in pr_numbers:
             pr = PullRequest.from_id(pr_number)
+
+            # Clean expired environments with pointers
             if pr.stop_if_expired(max_age_hours, dry_run):
                 cleaned_count += 1
 
-        if cleaned_count > 0:
-            p(f"🎪 ✅ Cleaned up {cleaned_count} expired environments")
+            # Clean orphaned environments without pointers
+            orphan_cleaned_count += pr.cleanup_orphaned_shows(max_age_hours, dry_run)
+
+        if cleaned_count > 0 or orphan_cleaned_count > 0:
+            if cleaned_count > 0:
+                p(f"🎪 ✅ Cleaned up {cleaned_count} expired environments")
+            if orphan_cleaned_count > 0:
+                p(f"🎪 ✅ Cleaned up {orphan_cleaned_count} orphaned environments")
         else:
             p("🎪 No expired environments found")
 
@@ -715,20 +720,33 @@ def cleanup(
                     if len(aws_orphans) > 3:
                         p(f"  ... and {len(aws_orphans) - 3} more")
 
-                    if not force and not dry_run:
-                        if typer.confirm(f"Delete {len(aws_orphans)} orphaned AWS resources?"):
-                            # Clean up AWS orphans
-                            for orphan in aws_orphans:
-                                if not dry_run:
-                                    aws.delete_service(orphan["service_name"])
-                                aws_cleaned_count += 1
-                        else:
-                            p("❌ Skipping AWS orphan cleanup")
-                    elif force or dry_run:
+                    # Determine if we should proceed with cleanup
+                    should_cleanup = False
+                    if dry_run:
+                        should_cleanup = True
                         aws_cleaned_count = len(aws_orphans)
-                        if not dry_run:
-                            for orphan in aws_orphans:
-                                aws.delete_service(orphan["service_name"])
+                    elif force:
+                        should_cleanup = True
+                    elif typer.confirm(f"Delete {len(aws_orphans)} orphaned AWS resources?"):
+                        should_cleanup = True
+                    else:
+                        p("❌ Skipping AWS orphan cleanup")
+
+                    # Perform cleanup if approved
+                    if should_cleanup and not dry_run:
+                        from .core.service_name import ServiceName
+
+                        for orphan in aws_orphans:
+                            service_name_str = orphan["service_name"]
+                            try:
+                                # Parse service name to get PR number
+                                svc = ServiceName.from_service_name(service_name_str)
+                                # Pass base name (without -service) to delete_environment
+                                aws.delete_environment(svc.base_name, svc.pr_number)
+                                aws_cleaned_count += 1
+                            except ValueError as e:
+                                p(f"⚠️ Skipping invalid service name {service_name_str}: {e}")
+                                continue
 
                 if aws_cleaned_count > 0:
                     p(f"☁️ ✅ Cleaned up {aws_cleaned_count} orphaned AWS resources")

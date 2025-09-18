@@ -5,7 +5,6 @@ Handles atomic transactions, trigger processing, and environment orchestration.
 """
 
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any, List, Optional
 
 from .aws import AWSInterface
@@ -566,8 +565,13 @@ class PullRequest:
                 # Stop the current environment if it exists
                 if self.current_show:
                     print(f"🗑️ Destroying environment {self.current_show.sha}...")
-                    self.current_show.stop(dry_run_github=dry_run_github, dry_run_aws=dry_run_aws)
-                    print("☁️ AWS resources deleted")
+                    success = self.current_show.stop(
+                        dry_run_github=dry_run_github, dry_run_aws=dry_run_aws
+                    )
+                    if success:
+                        print("☁️ AWS resources deleted")
+                    else:
+                        print("⚠️ AWS resource deletion may have failed")
                     self._post_cleanup_comment(self.current_show, dry_run_github)
                 else:
                     print("🗑️ No current environment to destroy")
@@ -600,8 +604,12 @@ class PullRequest:
         try:
             # Stop the current environment if it exists
             if self.current_show:
-                self.current_show.stop(**kwargs)
-                print("☁️ AWS resources deleted")
+                success = self.current_show.stop(**kwargs)
+                if success:
+                    print("☁️ AWS resources deleted")
+                else:
+                    print("⚠️ AWS resource deletion may have failed")
+                    return SyncResult(success=False, action_taken="stop_environment")
             else:
                 print("🗑️ No current environment to destroy")
 
@@ -663,6 +671,7 @@ class PullRequest:
                         "ttl": show.ttl,
                         "requested_by": show.requested_by,
                         "created_at": show.created_at,
+                        "age": show.age_display(),  # Add age display
                         "aws_service_name": show.aws_service_name,
                         "show_type": show_type,  # New field for display
                     },
@@ -779,12 +788,14 @@ class PullRequest:
 
     def _create_new_show(self, target_sha: str) -> Show:
         """Create a new Show object for the target SHA"""
+        from .date_utils import format_utc_now
+
         return Show(
             pr_number=self.pr_number,
             sha=short_sha(target_sha),
             status="building",
-            created_at=datetime.utcnow().strftime("%Y-%m-%dT%H-%M"),
-            ttl="24h",
+            created_at=format_utc_now(),
+            ttl="48h",
             requested_by=GitHubInterface.get_current_actor(),
         )
 
@@ -858,6 +869,48 @@ class PullRequest:
 
         return False  # Not expired
 
+    def cleanup_orphaned_shows(self, max_age_hours: int, dry_run: bool = False) -> int:
+        """Clean up orphaned shows (environments without pointer labels)
+
+        Args:
+            max_age_hours: Maximum age in hours before considering orphaned environment for cleanup
+            dry_run: If True, just check don't actually stop
+
+        Returns:
+            Number of orphaned environments cleaned up
+        """
+        cleaned_count = 0
+
+        # Find orphaned shows (shows without active or building pointers)
+        orphaned_shows = []
+        for show in self.shows:
+            has_pointer = any(
+                label in self.labels for label in [f"🎪 🎯 {show.sha}", f"🎪 🏗️ {show.sha}"]
+            )
+            if not has_pointer and show.is_expired(max_age_hours):
+                orphaned_shows.append(show)
+
+        # Clean up each orphaned show
+        for show in orphaned_shows:
+            if dry_run:
+                print(
+                    f"🎪 [DRY-RUN] Would clean orphaned environment: PR #{self.pr_number} SHA {show.sha}"
+                )
+                cleaned_count += 1
+            else:
+                print(f"🧹 Cleaning orphaned environment: PR #{self.pr_number} SHA {show.sha}")
+                # Stop the specific show (AWS resources)
+                success = show.stop(dry_run_github=False, dry_run_aws=False)
+                if success:
+                    # Also clean up GitHub labels for this specific show
+                    self.remove_sha_labels(show.sha)
+                    cleaned_count += 1
+                    print(f"✅ Cleaned orphaned environment: {show.sha}")
+                else:
+                    print(f"⚠️ Failed to clean orphaned environment: {show.sha}")
+
+        return cleaned_count
+
     @classmethod
     def find_all_with_environments(cls) -> List[int]:
         """Find all PR numbers that have active environments"""
@@ -880,9 +933,11 @@ class PullRequest:
 
         # For running environments, ensure only ONE active pointer exists
         if show.status == "running":
-            # Remove ALL existing active pointers (there should only be one)
+            # Remove ALL existing active pointers EXCEPT for this SHA's pointer
             existing_active_pointers = [
-                label for label in self.labels if label.startswith("🎪 🎯 ")
+                label
+                for label in self.labels
+                if label.startswith("🎪 🎯 ") and label != f"🎪 🎯 {show.sha}"
             ]
             for old_pointer in existing_active_pointers:
                 print(f"🎯 Removing old active pointer: {old_pointer}")
