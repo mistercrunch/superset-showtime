@@ -788,6 +788,7 @@ class PullRequest:
 
     def _create_new_show(self, target_sha: str) -> Show:
         """Create a new Show object for the target SHA"""
+        from .constants import DEFAULT_TTL
         from .date_utils import format_utc_now
 
         return Show(
@@ -795,7 +796,7 @@ class PullRequest:
             sha=short_sha(target_sha),
             status="building",
             created_at=format_utc_now(),
-            ttl="48h",
+            ttl=DEFAULT_TTL,
             requested_by=GitHubInterface.get_current_actor(),
         )
 

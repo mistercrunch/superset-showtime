@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Optional
 
+from .constants import DEFAULT_TTL
+
 
 # Import interfaces for singleton access
 # Note: These will be imported when the module loads, creating singletons
@@ -28,7 +30,7 @@ class Show:
     status: str  # building, built, deploying, running, updating, failed
     ip: Optional[str] = None  # Environment IP address
     created_at: Optional[str] = None  # ISO timestamp
-    ttl: str = "48h"  # 24h, 48h, close, etc.
+    ttl: str = DEFAULT_TTL  # 24h, 48h, close, etc.
     requested_by: Optional[str] = None  # GitHub username
 
     @property
