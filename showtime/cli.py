@@ -8,6 +8,7 @@ from typing import Dict, Optional
 
 import typer
 from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from .core.github import GitHubError, GitHubInterface
@@ -172,7 +173,15 @@ def status(
 ) -> None:
     """Show environment status for PR"""
     try:
-        pr = PullRequest.from_id(pr_number)
+        # Show spinner while fetching PR status
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=Console(),
+            transient=True,
+        ) as progress:
+            progress.add_task(description=f"🎪 Fetching status for PR #{pr_number}...", total=None)
+            pr = PullRequest.from_id(pr_number)
 
         # Use PullRequest method for data
         status_data = pr.get_status()
@@ -289,8 +298,16 @@ def list(
 ) -> None:
     """List all environments"""
     try:
-        # Use PullRequest method for data collection
-        all_environments = PullRequest.list_all_environments()
+        # Show spinner while fetching environments
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=Console(),
+            transient=True,
+        ) as progress:
+            progress.add_task(description="🎪 Fetching environments...", total=None)
+            # Use PullRequest method for data collection
+            all_environments = PullRequest.list_all_environments()
 
         if not all_environments:
             p("🎪 No environments currently running")
