@@ -345,8 +345,9 @@ def list(
         table.add_column("TTL", style="yellow", min_width=6)
         table.add_column("User", style="magenta", min_width=10)
 
-        # Sort by PR number, then by show type (active first, then building, then orphaned)
-        type_priority = {"active": 1, "building": 2, "orphaned": 3}
+        # Sort by PR number, then by show type (active first, then building, then orphaned, legacy last)
+        # TODO: Remove after legacy cleanup - legacy type priority
+        type_priority = {"active": 1, "building": 2, "orphaned": 3, "legacy": 4}
         sorted_envs = sorted(
             filtered_envs,
             key=lambda e: (
@@ -365,6 +366,8 @@ def list(
                 type_display = "🎯"  # Active environment (has pointer)
             elif show_type == "building":
                 type_display = "🔨"  # Building environment (hammer is single-width)
+            elif show_type == "legacy":  # TODO: Remove after legacy cleanup
+                type_display = "⚠️"  # Legacy environment (no SHA in service name)
             else:
                 type_display = "👻"  # Orphaned environment (no pointer)
 
@@ -391,17 +394,26 @@ def list(
             # Simple status display - just emoji
             status_display = "🟢" if show_data["status"] == "running" else "❌"
 
+            # TODO: Remove after legacy cleanup - handle missing legacy fields
+            sha_display = show_data["sha"] if show_data["sha"] != "-" else "-"
+            ttl_display = show_data["ttl"] if show_data["ttl"] else "-"
+            user_display = (
+                f"@{show_data['requested_by']}"
+                if show_data["requested_by"] and show_data["requested_by"] != "-"
+                else "-"
+            )
+
             table.add_row(
                 clickable_pr,
                 f"{show_data['aws_service_name']}-service",
                 type_display,
                 status_display,
-                show_data["sha"],
+                sha_display,
                 age_display,
                 superset_url,
                 aws_logs_link,
-                show_data["ttl"],
-                f"@{show_data['requested_by']}" if show_data["requested_by"] else "-",
+                ttl_display,
+                user_display,
             )
 
         p(table)

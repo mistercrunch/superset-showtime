@@ -646,10 +646,15 @@ class PullRequest:
         pr_numbers = get_github().find_prs_with_shows()
 
         all_environments = []
+        github_service_names = set()  # Track services we found via GitHub
+
         for pr_number in pr_numbers:
             pr = cls.from_id(pr_number)
             # Show ALL environments, not just current_show
             for show in pr.shows:
+                # Track this service name for later
+                github_service_names.add(show.ecs_service_name)
+
                 # Determine show type based on pointer presence
                 show_type = "orphaned"  # Default
 
@@ -674,9 +679,63 @@ class PullRequest:
                         "age": show.age_display(),  # Add age display
                         "aws_service_name": show.aws_service_name,
                         "show_type": show_type,  # New field for display
+                        "is_legacy": False,  # Regular environment
                     },
                 }
                 all_environments.append(environment_data)
+
+        # TODO: Remove after legacy cleanup - Find AWS-only services (legacy pr-XXXXX-service format)
+        try:
+            from .aws import get_aws
+            from .service_name import ServiceName
+
+            aws = get_aws()
+            aws_services = aws.list_circus_environments()
+
+            for aws_service in aws_services:
+                service_name_str = aws_service.get("service_name", "")
+
+                # Skip if we already have this from GitHub
+                if service_name_str in github_service_names:
+                    continue
+
+                # Parse the service name to get PR number
+                try:
+                    svc = ServiceName.from_service_name(service_name_str)
+
+                    # Legacy services have no SHA
+                    is_legacy = svc.sha is None
+
+                    # Add as a legacy/orphaned environment
+                    environment_data = {
+                        "pr_number": svc.pr_number,
+                        "status": "active",  # Keep for compatibility
+                        "show": {
+                            "sha": svc.sha or "-",  # Show dash for missing SHA
+                            "status": aws_service["status"].lower()
+                            if aws_service.get("status")
+                            else "running",
+                            "ip": aws_service.get("ip"),
+                            "ttl": None,  # Legacy environments have no TTL labels
+                            "requested_by": "-",  # Unknown user for legacy
+                            "created_at": None,  # Will show as "-" in display
+                            "age": "-",  # Unknown age
+                            "aws_service_name": svc.base_name,  # pr-XXXXX or pr-XXXXX-sha format
+                            "show_type": "legacy"
+                            if is_legacy
+                            else "orphaned",  # Mark as legacy type
+                            "is_legacy": is_legacy,  # Flag for display formatting
+                        },
+                    }
+                    all_environments.append(environment_data)
+
+                except ValueError:
+                    # Skip services that don't match our pattern
+                    continue
+
+        except Exception:
+            # If AWS lookup fails, just show GitHub-based environments
+            pass
 
         return all_environments
 
