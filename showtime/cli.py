@@ -192,8 +192,9 @@ def status(
 
         show_data = status_data["show"]
 
-        # Create status table
-        table = Table(title=f"🎪 Environment Status - PR #{pr_number}")
+        # Create status table with clickable PR link
+        pr_url = f"https://github.com/apache/superset/pull/{pr_number}"
+        table = Table(title=f"🎪 Environment Status - [link={pr_url}]PR #{pr_number}[/link]")
         table.add_column("Property", style="cyan")
         table.add_column("Value", style="white")
 
@@ -205,7 +206,8 @@ def status(
         table.add_row("Service Name", f"`{show_data['aws_service_name']}`")
 
         if show_data["ip"]:
-            table.add_row("URL", f"http://{show_data['ip']}:8080")
+            superset_url = f"http://{show_data['ip']}:8080"
+            table.add_row("Superset URL", f"[link={superset_url}]{superset_url}[/link]")
         if show_data["created_at"]:
             table.add_row("Created", show_data["created_at"])
 
@@ -214,12 +216,12 @@ def status(
         if show_data["requested_by"]:
             table.add_row("Requested by", f"@{show_data['requested_by']}")
 
-        # Add AWS Console URLs
+        # Add AWS Console URLs - clickable
         from .core.github_messages import get_aws_console_urls
 
         aws_urls = get_aws_console_urls(show_data["aws_service_name"])
-        table.add_row("AWS Logs", aws_urls["logs"])
-        table.add_row("AWS Service", aws_urls["service"])
+        table.add_row("AWS Logs", f"[link={aws_urls['logs']}]View Logs ↗[/link]")
+        table.add_row("AWS Service", f"[link={aws_urls['service']}]View Service ↗[/link]")
 
         # Show active triggers
         trigger_labels = [label for label in pr.labels if "showtime-trigger-" in label]
