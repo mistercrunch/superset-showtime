@@ -34,7 +34,7 @@
                 },
                 {
                     "name": "SUPERSET__SQLALCHEMY_EXAMPLES_URI",
-                    "value": "duckdb:////app/data/examples.duckdb?access_mode=read_only"
+                    "value": "sqlite:////tmp/examples.db"
                 },
                 {
                     "name": "SUPERSET_LOG_LEVEL",
