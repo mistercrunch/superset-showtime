@@ -202,7 +202,7 @@ def status(
         status_display = STATUS_DISPLAY.get(show_data["status"], "❓")
         table.add_row("Status", f"{status_display} {show_data['status'].title()}")
         table.add_row("Environment", f"`{show_data['sha']}`")
-        table.add_row("AWS Service", f"`{show_data['aws_service_name']}`")
+        table.add_row("Service Name", f"`{show_data['aws_service_name']}`")
 
         if show_data["ip"]:
             table.add_row("URL", f"http://{show_data['ip']}:8080")
@@ -213,6 +213,13 @@ def status(
 
         if show_data["requested_by"]:
             table.add_row("Requested by", f"@{show_data['requested_by']}")
+
+        # Add AWS Console URLs
+        from .core.github_messages import get_aws_console_urls
+
+        aws_urls = get_aws_console_urls(show_data["aws_service_name"])
+        table.add_row("AWS Logs", aws_urls["logs"])
+        table.add_row("AWS Service", aws_urls["service"])
 
         # Show active triggers
         trigger_labels = [label for label in pr.labels if "showtime-trigger-" in label]
