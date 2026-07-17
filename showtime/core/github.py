@@ -12,6 +12,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 import httpx
 
+from .constants import SHOWTIME_COMMENT_MARKER
+
 # SHA-containing circus label pattern: 🎪 followed by 7+ hex chars anywhere
 SHA_LABEL_PATTERN = re.compile(r"^🎪 .*[a-f0-9]{7,}.*$")
 
@@ -19,6 +21,19 @@ SHA_LABEL_PATTERN = re.compile(r"^🎪 .*[a-f0-9]{7,}.*$")
 def is_sha_label(label: str) -> bool:
     """Check if a circus tent label contains a SHA (dynamic/per-environment label)."""
     return bool(SHA_LABEL_PATTERN.match(label))
+
+
+def is_showtime_comment(body: str) -> bool:
+    """Check if a PR comment body was authored by Showtime.
+
+    New comments carry an invisible HTML marker. Comments posted by older
+    Showtime versions are recognized by their distinctive header instead.
+    """
+    if SHOWTIME_COMMENT_MARKER in body:
+        return True
+    # Legacy comments (posted before the marker existed): they all start with
+    # the circus tent emoji and link to the superset-showtime repository
+    return body.startswith("🎪") and "superset-showtime" in body
 
 
 # Constants
@@ -263,6 +278,34 @@ class GitHubInterface:
         with httpx.Client() as client:
             response = client.post(url, headers=self.headers, json={"body": body})
             response.raise_for_status()
+
+    def get_comments(self, pr_number: int) -> List[Dict[str, Any]]:
+        """Get all issue comments on a PR (paginated)"""
+        url = f"{self.base_url}/repos/{self.org}/{self.repo}/issues/{pr_number}/comments"
+        return self._paginate(url)
+
+    def delete_comment(self, comment_id: int) -> None:
+        """Delete a PR comment by id"""
+        url = f"{self.base_url}/repos/{self.org}/{self.repo}/issues/comments/{comment_id}"
+
+        with httpx.Client() as client:
+            response = client.delete(url, headers=self.headers)
+            # 404 is OK - comment might already be gone
+            if response.status_code not in (204, 404):
+                response.raise_for_status()
+
+    def delete_showtime_comments(self, pr_number: int) -> int:
+        """Delete all previous Showtime comments on a PR
+
+        Returns:
+            Number of comments deleted
+        """
+        deleted = 0
+        for comment in self.get_comments(pr_number):
+            if is_showtime_comment(comment.get("body") or ""):
+                self.delete_comment(comment["id"])
+                deleted += 1
+        return deleted
 
     def validate_connection(self) -> bool:
         """Test GitHub API connection"""
