@@ -120,6 +120,34 @@ showtime cleanup --dry-run --older-than 1h         # Test cleanup logic
 | `🎪 {sha} ⌛ {ttl}` | Time-to-live policy | `🎪 abc123f ⌛ 24h` |
 | `🎪 {sha} 🤡 {username}` | Who requested | `🎪 abc123f 🤡 maxime` |
 
+### 🚩 Feature Flag Labels (Add These to Your PR)
+
+Toggle any Superset `FEATURE_FLAGS` entry without touching code:
+
+| Label Pattern | Meaning | Example |
+|---------------|---------|---------|
+| `🎪 🚩 {FLAG_NAME}={true\|false}` | Set a Superset feature flag | `🎪 🚩 EMBEDDED_SUPERSET=true` |
+
+These are **PR-level** labels — they are not tied to a SHA and survive rebuilds.
+Each one becomes a `SUPERSET_FEATURE_{FLAG_NAME}` environment variable on the
+container, which `superset/config.py` merges into the feature flag defaults.
+
+**They apply without a rebuild.** On a running environment, adding or removing a
+flag label reconciles the ECS task definition and triggers a rolling restart —
+no Docker build. Removing a label clears the flag; the labels are the complete
+desired state.
+
+```bash
+# Via labels in the GitHub UI, or from the CLI:
+showtime flags 1234                              # list current flags
+showtime flags 1234 --add EMBEDDED_SUPERSET=true
+showtime flags 1234 --remove EMBEDDED_SUPERSET
+```
+
+Common flags are predefined with descriptions — run `showtime setup-labels` once
+per repo to create them, then pick them from GitHub's label dropdown. Any valid
+`FLAG_NAME=true|false` label works even if it isn't predefined.
+
 ## 🔧 Testing Configuration Changes
 
 **Approach**: Modify configuration directly in your PR code, then trigger environment.
@@ -218,6 +246,9 @@ showtime stop PR_NUMBER              # Delete environment
 showtime status PR_NUMBER            # Show current state
 showtime list                        # List all environments
 showtime cleanup --older-than 48h    # Clean up expired environments
+showtime flags PR_NUMBER             # Manage Superset feature flags
+showtime labels                      # Complete label reference
+showtime setup-labels                # Create label definitions in the repo
 ```
 
 
