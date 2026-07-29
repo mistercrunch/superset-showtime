@@ -5,6 +5,7 @@ Tests for PullRequest class - PR-level orchestration
 import os
 from unittest.mock import Mock, patch
 
+from showtime.core.aws import FeatureFlagResult
 from showtime.core.pull_request import PullRequest, SyncResult
 from showtime.core.show import Show
 from showtime.core.sync_state import ActionNeeded, AuthStatus, SyncState
@@ -522,7 +523,14 @@ def test_pullrequest_sync_same_sha_no_action(mock_get_github: Mock) -> None:
     # PR with existing healthy environment, same SHA, no triggers
     pr = PullRequest(1234, ["🎪 abc123f 🚦 running", "🎪 🎯 abc123f", "bug", "enhancement"])
 
-    result = pr.sync("abc123f")  # Same SHA as current
+    # A running environment always gets a feature flag reconcile; with no flag
+    # labels and none deployed it changes nothing.
+    with patch.object(
+        Show,
+        "update_feature_flags",
+        return_value=FeatureFlagResult(success=True, changed=False),
+    ):
+        result = pr.sync("abc123f")  # Same SHA as current
 
     assert result.success is True
     assert result.action_taken == "no_action"

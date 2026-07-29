@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional
 
 import boto3  # type: ignore[import-untyped]
 
+from .feature_flags import reconcile_env_vars
+
 # Module logger for machine-readable events (separate from CLI print statements)
 logger = logging.getLogger(__name__)
 
@@ -34,6 +36,15 @@ class EnvironmentResult:
     success: bool
     ip: Optional[str] = None
     service_name: Optional[str] = None
+    error: Optional[str] = None
+
+
+@dataclass
+class FeatureFlagResult:
+    """Result of reconciling feature flags against a running environment"""
+
+    success: bool
+    changed: bool = False
     error: Optional[str] = None
 
 
@@ -573,8 +584,18 @@ class AWSInterface:
         except Exception as e:
             raise AWSError(message=str(e), operation="cleanup_orphaned_environments") from e
 
-    def update_feature_flags(self, service_name: str, feature_flags: Dict[str, bool]) -> bool:
-        """Update feature flags in running environment"""
+    def update_feature_flags(
+        self, service_name: str, feature_flags: Dict[str, bool]
+    ) -> FeatureFlagResult:
+        """Reconcile feature flags on a running environment.
+
+        Args:
+            service_name: ECS service to reconcile
+            feature_flags: Complete desired set, SUPERSET_FEATURE_ prefixed keys
+
+        Returns:
+            FeatureFlagResult, `changed` says whether ECS was touched.
+        """
         try:
             # Get current task definition
             service_response = self.ecs_client.describe_services(
@@ -582,7 +603,7 @@ class AWSInterface:
             )
 
             if not service_response["services"]:
-                return False
+                return FeatureFlagResult(success=False, error=f"Service not found: {service_name}")
 
             task_def_arn = service_response["services"][0]["taskDefinition"]
 
@@ -593,18 +614,14 @@ class AWSInterface:
 
             task_def = task_def_response["taskDefinition"]
 
-            # Update environment variables
             container_def = task_def["containerDefinitions"][0]
-            env_vars = container_def.get("environment", [])
 
-            # Update feature flags
-            for flag_name, enabled in feature_flags.items():
-                # Remove existing flag
-                env_vars = [e for e in env_vars if e["name"] != flag_name]
-                # Add updated flag
-                env_vars.append({"name": flag_name, "value": "True" if enabled else "False"})
+            desired_env = reconcile_env_vars(container_def.get("environment", []), feature_flags)
+            if desired_env is None:
+                print(f"🚩 Feature flags already up to date on {service_name}")
+                return FeatureFlagResult(success=True, changed=False)
 
-            container_def["environment"] = env_vars
+            container_def["environment"] = desired_env
 
             # Register new task definition
             new_task_def = self.ecs_client.register_task_definition(
@@ -625,11 +642,11 @@ class AWSInterface:
                 taskDefinition=new_task_def["taskDefinition"]["taskDefinitionArn"],
             )
 
-            return True
+            return FeatureFlagResult(success=True, changed=True)
 
         except Exception as e:
             print(f"Feature flag update failed: {e}")
-            return False
+            return FeatureFlagResult(success=False, error=str(e))
 
     def _delete_ecs_service(self, service_name: str) -> bool:
         """Delete ECS service (replicate GHA delete-service step)"""

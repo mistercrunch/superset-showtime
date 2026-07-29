@@ -391,11 +391,9 @@ class PullRequest:
         }
         action_needed = action_map.get(action_needed_str, ActionNeeded.NO_ACTION)
 
-        # Check if feature flags need hot-update even when no deployment action
-        has_feature_flags = bool(self.get_feature_flags())
+        # Running envs always reconcile flags - that's how a removed flag gets cleared
         needs_flag_update = (
             action_needed == ActionNeeded.NO_ACTION
-            and has_feature_flags
             and self.current_show is not None
             and self.current_show.is_running
         )
@@ -657,33 +655,35 @@ class PullRequest:
                 return SyncResult(success=True, action_taken="destroy_environment")
 
             else:
-                # No deployment action needed - but check for feature flag changes
-                # on the running environment and hot-update if needed
-                if feature_flags_env and self.current_show and self.current_show.is_running:
+                # No deployment needed - reconcile flags (runs with zero labels too)
+                if self.current_show and self.current_show.is_running:
                     from .feature_flags import feature_flags_to_prefixed_dict
 
                     prefixed_flags = feature_flags_to_prefixed_dict(self.get_feature_flags())
                     print(
-                        f"🚩 Hot-updating {len(prefixed_flags)} feature flags on "
+                        f"🚩 Reconciling {len(prefixed_flags)} feature flags on "
                         f"{self.current_show.ecs_service_name}..."
                     )
-                    success = self.current_show.update_feature_flags(
+                    flag_result = self.current_show.update_feature_flags(
                         prefixed_flags, dry_run=dry_run_aws
                     )
-                    if success:
+                    if not flag_result.success:
+                        print("⚠️ Feature flag reconcile failed")
+                        return SyncResult(
+                            success=False,
+                            action_taken="update_feature_flags",
+                            error=flag_result.error or "Feature flag reconcile failed",
+                        )
+
+                    if flag_result.changed:
                         print("✅ Feature flags updated (container will restart)")
                         return SyncResult(
                             success=True,
                             action_taken="update_feature_flags",
                             show=self.current_show,
                         )
-                    else:
-                        print("⚠️ Feature flag hot-update failed")
-                        return SyncResult(
-                            success=False,
-                            action_taken="update_feature_flags",
-                            error="Feature flag hot-update failed",
-                        )
+
+                    print("✅ Feature flags already in sync")
 
                 return SyncResult(success=True, action_taken="no_action")
 

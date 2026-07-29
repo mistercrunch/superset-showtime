@@ -6,7 +6,10 @@ Single environment operations: Docker build, AWS deployment, state transitions.
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from .aws import FeatureFlagResult
 
 
 # Import interfaces for singleton access
@@ -164,22 +167,21 @@ class Show:
         self,
         feature_flags: Dict[str, bool],
         dry_run: bool = False,
-    ) -> bool:
-        """Hot-update feature flags on a running environment.
-
-        Updates the ECS task definition with new env vars and triggers a rolling
-        restart. No Docker rebuild needed.
+    ) -> "FeatureFlagResult":
+        """Reconcile feature flags on this running environment (no Docker rebuild).
 
         Args:
-            feature_flags: Dict with SUPERSET_FEATURE_ prefixed keys and bool values.
+            feature_flags: Complete desired set, SUPERSET_FEATURE_ prefixed keys.
             dry_run: If True, skip actual AWS call.
 
         Returns:
-            True if successful, False otherwise.
+            FeatureFlagResult, `changed` says whether ECS was touched.
         """
+        from .aws import FeatureFlagResult
+
         if dry_run:
-            print(f"🚩 [DRY-RUN] Would hot-update {len(feature_flags)} feature flags")
-            return True
+            print(f"🚩 [DRY-RUN] Would reconcile {len(feature_flags)} feature flags")
+            return FeatureFlagResult(success=True, changed=True)
 
         _, aws = get_interfaces()
         return aws.update_feature_flags(self.ecs_service_name, feature_flags)

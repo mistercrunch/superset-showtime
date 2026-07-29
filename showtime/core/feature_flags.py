@@ -103,6 +103,34 @@ def feature_flags_to_aws_env(flags: Dict[str, bool]) -> List[Dict[str, str]]:
     return env_vars
 
 
+def reconcile_env_vars(
+    current_env: List[Dict[str, str]], desired_flags: Dict[str, bool]
+) -> Optional[List[Dict[str, str]]]:
+    """Compute the env var list a container should have for the given flags.
+
+    Non-flag vars are kept as-is and SUPERSET_FEATURE_* vars are rebuilt from
+    desired_flags, so a flag whose label was removed drops out.
+
+    Args:
+        current_env: Deployed env vars, [{"name": ..., "value": ...}, ...]
+        desired_flags: Complete desired set, SUPERSET_FEATURE_ prefixed keys
+
+    Returns:
+        The new env var list, or None if it would be identical to current_env.
+    """
+    desired_env = [e for e in current_env if not e["name"].startswith(FEATURE_FLAG_ENV_PREFIX)]
+    for flag_name, enabled in sorted(desired_flags.items()):
+        desired_env.append({"name": flag_name, "value": "True" if enabled else "False"})
+
+    def as_set(env: List[Dict[str, str]]) -> Set[Tuple[str, str]]:
+        return {(e["name"], e["value"]) for e in env}
+
+    if as_set(desired_env) == as_set(current_env):
+        return None
+
+    return desired_env
+
+
 def feature_flags_to_prefixed_dict(flags: Dict[str, bool]) -> Dict[str, bool]:
     """Convert feature flags dict to SUPERSET_FEATURE_ prefixed dict.
 

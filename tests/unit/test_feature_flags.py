@@ -320,8 +320,8 @@ class TestAnalyzeSyncNeededWithFeatureFlags:
             assert result.build_needed is False
             assert result.sync_needed is True  # Feature flags need hot-update!
 
-    def test_analyze_sync_needed_false_without_flags(self) -> None:
-        """sync_needed should be False when no flags exist on a running environment"""
+    def test_analyze_sync_needed_without_flags_on_running_env(self) -> None:
+        """sync_needed stays True with no flags so a removed flag can be cleared"""
         from unittest.mock import Mock, patch
 
         from showtime.core.sync_state import ActionNeeded
@@ -341,7 +341,8 @@ class TestAnalyzeSyncNeededWithFeatureFlags:
 
             assert result.action_needed == ActionNeeded.NO_ACTION
             assert result.build_needed is False
-            assert result.sync_needed is False  # No flags, no hot-update needed
+            # The reconcile is a no-op against AWS when nothing changed
+            assert result.sync_needed is True
 
 
 class TestSyncHotUpdateFeatureFlags:
@@ -350,6 +351,8 @@ class TestSyncHotUpdateFeatureFlags:
     def test_sync_no_action_with_flags_triggers_hot_update(self) -> None:
         """When sync has no_action but flags exist, it should hot-update"""
         from unittest.mock import Mock, patch
+
+        from showtime.core.aws import FeatureFlagResult
 
         # PR with a running environment and a feature flag label
         labels = [
@@ -364,7 +367,9 @@ class TestSyncHotUpdateFeatureFlags:
             with patch.object(pr, "refresh_labels"):
                 # Mock the current_show's update_feature_flags
                 assert pr.current_show is not None
-                pr.current_show.update_feature_flags = Mock(return_value=True)  # type: ignore[method-assign]
+                pr.current_show.update_feature_flags = Mock(  # type: ignore[method-assign]
+                    return_value=FeatureFlagResult(success=True, changed=True)
+                )
 
                 result = pr.sync(
                     "abc123f", dry_run_aws=True, dry_run_github=True, dry_run_docker=True
@@ -374,8 +379,10 @@ class TestSyncHotUpdateFeatureFlags:
                 assert result.action_taken == "update_feature_flags"
 
     def test_sync_no_action_without_flags_returns_no_action(self) -> None:
-        """When sync has no_action and no flags, it should return no_action"""
-        from unittest.mock import patch
+        """With no flags to apply and nothing deployed, sync reports no_action"""
+        from unittest.mock import Mock, patch
+
+        from showtime.core.aws import FeatureFlagResult
 
         labels = [
             "🎪 abc123f 🚦 running",
@@ -385,6 +392,11 @@ class TestSyncHotUpdateFeatureFlags:
 
         with patch.object(pr, "_determine_action", return_value="no_action"):
             with patch.object(pr, "refresh_labels"):
+                assert pr.current_show is not None
+                pr.current_show.update_feature_flags = Mock(  # type: ignore[method-assign]
+                    return_value=FeatureFlagResult(success=True, changed=False)
+                )
+
                 result = pr.sync(
                     "abc123f", dry_run_aws=True, dry_run_github=True, dry_run_docker=True
                 )
