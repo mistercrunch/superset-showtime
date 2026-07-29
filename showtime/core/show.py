@@ -199,53 +199,6 @@ class Show:
 
         return True  # Dry run is always "successful"
 
-    def _inject_config_overlay(self) -> None:
-        """Inject superset_config_docker.py into the build context.
-
-        Copies our config overlay into the Superset repo's build context and
-        appends a COPY instruction to the Dockerfile so the config ends up in
-        /app/pythonpath/ inside the image.  This ensures SUPERSET_FEATURE_*
-        env vars always override FEATURE_FLAGS, even if a superset_config.py
-        is present.
-        """
-        import shutil
-        from pathlib import Path
-
-        # Source: bundled config overlay in our package data
-        src = Path(__file__).parent.parent / "data" / "superset_config_docker.py"
-        if not src.exists():
-            print("⚠️ superset_config_docker.py not found, skipping config injection")
-            return
-
-        # Destination: build context (current working directory = Superset repo)
-        dest = Path("docker") / "pythonpath_dev" / "superset_config_docker.py"
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dest)
-        print(f"🚩 Injected {dest} into build context")
-
-        # Append a COPY instruction to the Dockerfile so it ends up in the image
-        dockerfile = Path("Dockerfile")
-        if not dockerfile.exists():
-            print("⚠️ Dockerfile not found, skipping Dockerfile patching")
-            return
-
-        content = dockerfile.read_text()
-        if "superset_config_docker.py" in content:
-            print("🚩 Dockerfile already has config overlay, skipping patch")
-            return
-
-        # Add a COPY after the showtime stage definition
-        patched = content.replace(
-            "FROM lean AS showtime",
-            "FROM lean AS showtime\n"
-            "COPY docker/pythonpath_dev/superset_config_docker.py /app/pythonpath/",
-        )
-        if patched != content:
-            dockerfile.write_text(patched)
-            print("🚩 Patched Dockerfile to COPY config overlay into /app/pythonpath/")
-        else:
-            print("⚠️ Could not find showtime stage in Dockerfile, skipping patch")
-
     def _build_docker_image(self) -> None:
         """Build Docker image for this environment"""
         import os
@@ -253,8 +206,7 @@ class Show:
 
         tag = f"apache/superset:pr-{self.pr_number}-{self.sha}-ci"
 
-        # Inject config overlay so SUPERSET_FEATURE_* env vars work
-        self._inject_config_overlay()
+        # No config injection: superset/config.py reads SUPERSET_FEATURE_* natively
 
         # Detect if running in CI environment
         is_ci = bool(os.getenv("GITHUB_ACTIONS") or os.getenv("CI"))
