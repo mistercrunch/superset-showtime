@@ -4,7 +4,7 @@
 Main command-line interface for Apache Superset circus tent environment management.
 """
 
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import typer
 from rich.console import Console
@@ -25,6 +25,18 @@ DEFAULT_GITHUB_ACTOR = "unknown"
 def _get_service_urls(show: Show) -> Dict[str, str]:
     """Get AWS Console URLs for a service"""
     return get_aws_console_urls(show.ecs_service_name)
+
+
+def _labels_for_flag(pr: PullRequest, flag_name: str) -> List[str]:
+    """Every label on the PR for this flag, matched the way the parser matches"""
+    from .core.feature_flags import parse_feature_flag_label
+
+    target = flag_name.strip().upper()
+    return sorted(
+        label
+        for label in pr.labels
+        if (parsed := parse_feature_flag_label(label)) and parsed[0] == target
+    )
 
 
 def _show_service_urls(show: Show, context: str = "deployment") -> None:
@@ -462,21 +474,26 @@ def flags(
                 p("Flag name must be uppercase with underscores, value must be true/false")
                 raise typer.Exit(1)
 
+            # Drop any label for this flag carrying the other value
+            for existing in _labels_for_flag(pr, add.split("=", 1)[0]):
+                if existing != label:
+                    pr.remove_label(existing)
+
             pr.add_label(label)
             p(f"🚩 Added: {label}")
-            p("Flag will take effect on next deployment (push or trigger-start)")
+            p("Running environments pick this up on the next sync (rolling restart,")
+            p("no rebuild). Otherwise it applies on the next deployment.")
             return
 
         if remove:
             flag_name = remove.strip().upper()
-            removed = False
-            for val in ["true", "false"]:
-                label = create_feature_flag_label(flag_name, val)
-                if label in pr.labels:
-                    pr.remove_label(label)
-                    p(f"🚩 Removed: {label}")
-                    removed = True
-            if not removed:
+            matches = _labels_for_flag(pr, flag_name)
+            for label in matches:
+                pr.remove_label(label)
+                p(f"🚩 Removed: {label}")
+            if matches:
+                p("The flag is cleared from running environments on the next sync.")
+            else:
                 p(f"🚩 No feature flag label found for {flag_name}")
             return
 
@@ -484,7 +501,7 @@ def flags(
         feature_flags = pr.get_feature_flags()
         if not feature_flags:
             p(f"🚩 No feature flags set for PR #{pr_number}")
-            p("Add flags with: showtime flags {pr} --add EMBEDDED_SUPERSET=true")
+            p(f"Add flags with: showtime flags {pr_number} --add EMBEDDED_SUPERSET=true")
             return
 
         table = Table(title=f"🚩 Feature Flags - PR #{pr_number}")

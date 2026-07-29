@@ -180,8 +180,10 @@ class Show:
         from .aws import FeatureFlagResult
 
         if dry_run:
+            # Can't read the deployed task def offline, so report the most we know:
+            # nothing to apply means nothing to do
             print(f"🚩 [DRY-RUN] Would reconcile {len(feature_flags)} feature flags")
-            return FeatureFlagResult(success=True, changed=True)
+            return FeatureFlagResult(success=True, changed=bool(feature_flags))
 
         _, aws = get_interfaces()
         return aws.update_feature_flags(self.ecs_service_name, feature_flags)

@@ -74,7 +74,9 @@ def extract_feature_flags_from_labels(labels: Set[str]) -> Dict[str, bool]:
         Example: {"EMBEDDED_SUPERSET": True, "DASHBOARD_NATIVE_FILTERS": False}
     """
     flags: Dict[str, bool] = {}
-    for label in labels:
+    # Sorted so a PR carrying both FLAG=true and FLAG=false resolves the same way
+    # every run (set order is hash-seeded); "true" sorts last, so enabling wins
+    for label in sorted(labels):
         parsed = parse_feature_flag_label(label)
         if parsed:
             flag_name, value = parsed
